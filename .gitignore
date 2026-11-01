@@ -1,0 +1,12 @@
+.DS_Store
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+DerivedData/
+build/
+.env
+node_modules/
+*.ipa
+*.p8
+*.p12
+*.mobileprovision
