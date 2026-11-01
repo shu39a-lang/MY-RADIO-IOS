@@ -1,3 +1,4 @@
+
 workflows:
   ios-compile-check:
     name: MY RADIO / iOS compile check
@@ -13,24 +14,50 @@ workflows:
       - name: Compile simulator app
         script: |
           xcodebuild -project MyRadio.xcodeproj -scheme MyRadio -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+
   ios-testflight:
-    name: MY RADIO / TestFlight (requires Apple signing setup)
+    name: MY RADIO / TestFlight
     max_build_duration: 120
     instance_type: mac_mini_m2
+    integrations:
+      app_store_connect: codemagic7
     environment:
+      xcode: latest
       ios_signing:
         distribution_type: app_store
         bundle_identifier: jp.myradio.personal
-      xcode: latest
     scripts:
       - name: Generate Xcode project
         script: |
           brew install xcodegen
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p = Path("project.yml")
+          s = p.read_text()
+          old = "CURRENT_PROJECT_VERSION: '1'"
+          assert old in s
+          s = s.replace(
+              old,
+              "CURRENT_PROJECT_VERSION: '" +
+              os.environ["BUILD_NUMBER"] + "'",
+              1
+          )
+          p.write_text(s)
+          PY
           xcodegen generate
       - name: Apply Apple signing profile
         script: xcode-project use-profiles
       - name: Create signed IPA
-        script: xcode-project build-ipa --project MyRadio.xcodeproj --scheme MyRadio
+        script: |
+          xcode-project build-ipa \
+            --project MyRadio.xcodeproj \
+            --scheme MyRadio
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: false
+        submit_to_app_store: false
