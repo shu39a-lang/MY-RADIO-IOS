@@ -1,0 +1,29 @@
+
+name: MY RADIO iOS compile check
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Build iPhone app
+        run: |
+          xcodebuild -project MyRadio.xcodeproj -scheme MyRadio -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: cd backend && npm test
