@@ -23,3 +23,18 @@ test('extracts text and clickable sources', () => {
   assert.deepEqual(collectSources(result), [{title:'News',url:'https://example.com/news'}]);
   assert.equal(extractProgram(pickResponseText(result), collectSources(result)).title, '朝の音楽');
 });
+
+test('includes custom detailed interests and controls in normalized AI inputs', () => {
+  const r = normalize({profile: {
+    interests:['音楽・楽器'], customTopics:['高音質ギター'],
+    topicImportance:{'音楽・楽器':3, '高音質ギター':8},
+    topicNotes:{'音楽・楽器':'1970年代のフォーク'},
+    favoritePeople:'好きな歌手', listeningGoal:'趣味を深く楽しみたい',
+    depth:'詳しく深掘り', includeNews:false
+  }});
+  assert.equal(r.profile.topicImportance['音楽・楽器'], 3);
+  assert.equal(r.profile.topicImportance['高音質ギター'], 3);
+  assert.equal(r.profile.topicNotes['音楽・楽器'], '1970年代のフォーク');
+  assert.deepEqual(r.profile.customTopics, ['高音質ギター']);
+  assert.equal(r.profile.includeNews, false);
+});

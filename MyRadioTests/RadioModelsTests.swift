@@ -5,7 +5,7 @@ final class RadioModelsTests: XCTestCase {
     func testProfileDefaultsToTenMinutes() {
         let profile = ListenerProfile()
         XCTAssertEqual(profile.validMinutes, 10)
-        XCTAssertFalse(profile.interests.isEmpty)
+        XCTAssertTrue(profile.interests.isEmpty)
     }
 
     func testInvalidDurationFallsBackToTen() {

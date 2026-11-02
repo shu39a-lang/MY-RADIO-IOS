@@ -1,71 +1,58 @@
-# MY RADIO（マイラジオ）— iPhoneアプリ初期版 v0.1.0
+# MY RADIO — 自分専用の実際のAIラジオ（v0.3.0）
 
-「世界にひとつ、自分専用のAIラジオ」を目指す、実装済みのiOS試作プロジェクトです。
+これは**実際のAIによる番組制作と、高音質AI音声の取得・再生を行う**iPhoneアプリ一式です。前版の試聴用・端末標準のロボット読み上げを、本番の再生経路から外しました。
 
-## 初期版で使えること
-- **好みの登録**：興味ジャンル複数選択、具体的な趣味の自由入力、避けたいテーマ、地域・年齢層・性別（いずれも任意）、話し方、5/10/20分設定。
-- **お試し番組**：AI接続前でも、入力した好みに応じた短いデモ原稿を端末の音声合成で読み上げ。
-- **AI番組生成**：別途サーバーに接続すると、最新情報をウェブ検索し、関心に合わせた長い日本語番組原稿を生成。情報源をアプリ上に表示。
-- **音声プレーヤー**：AVSpeechSynthesizerで再生、一時停止、再開、停止。音声を生成するAI音声モデルは未使用で、iOS標準の音声合成を使用。
-- **朝の通知**：時刻を登録すると、通知音と案内を毎朝表示。通知タップ後、アプリ内で再生。
-- **保存**：設定と最後の番組はiPhone内に保存（UserDefaults）。試作用のサーバー接続トークンはKeychainに保存。
-- **データ削除**：保存した好み・番組・接続設定を初期化。
+## 実装済みの機能
 
-## 重要な制約
-- 現時点では**バックグラウンドから番組を10分間全自動再生する目覚まし機能はありません**。iOS通知を利用しています。時計アプリのアラームの代用にはしないでください。
-- AIサーバーのURLが空のときは**短いお試し原稿**のみ。ニュースを生成するわけではありません。
-- AIサーバーは実装済みですが、**OpenAI APIキーが未設定で、クラウドへのデプロイもまだ行っていません**。AI生成は接続後に動作します。
-- 10分/20分はAIへの原稿文字数目標です。端末の読み上げ速度で実際の再生時間が変動します。
-- 番組原稿は音声ファイルとして保存していません。AIによる自然なナレーションや音楽挿入は後の段階です。
-- AIニュースの正確性を100%保証できません。URL出典を確認してください。
-- 既存アプリとは完全に別のバンドルIDです。**公開前に固有のバンドルIDへ変更**してください。
+- 好みの登録：16カテゴリ＋自分だけの追加カテゴリ、優先度（少し／好き／最優先）、カテゴリごとの詳細、年齢層・性別（任意）、地域、好きな人物・作品、聞きたくない内容、ラジオの目的、説明の深さ、5・10・20分設定。端末に自動保存。
+- 入力の優先度・具体的な希望から **AIがその都度新しい番組原稿を生成**し、タイトル・原稿・情報源を表示。過去の番組タイトルを避ける編集ロジックも搭載。
+- **10種類の声**：男性系4、女性系4、中性的2。声を選択し、その声の実際のAI音声を取得して試聴。声の印象は目安なので日本語の実際の出力を聴いて選択。
+- iPhone標準の `AVSpeechSynthesizer` の代わりに **音声生成APIが返す実際のMP3** を再生。長文は安全な長さで分割し、バックグラウンド再生に対応。原稿と音声は端末に保持（音声ファイルは端末のキャッシュ）。
+- 個人用・実機テスト向けには **ユーザー本人の OpenAI API キーを Keychain に一度登録**するだけで、別サーバーを構築せず番組制作と音声生成ができる。
+- 将来の一般販売向けには `backend/` に **OpenAIの番組生成＋音声配信サーバー** を同梱。さらに、より人間らしい日本語の声を選べるように **ElevenLabs v4** をサーバー側で選択可能。
+- 朝の通知は従来どおり。iPhoneがロック中の完全自動10分再生は未実装（目覚まし時計の代用にはしない）。
 
-## Macで開く（Xcode）
-1. MacにXcode 16以上と[Homebrew](https://brew.sh/)を用意。
-2. ターミナルで `brew install xcodegen` を一度実行。
-3. このフォルダーで `xcodegen generate` を実行すると `MyRadio.xcodeproj` が作成されます。
-4. Xcodeで `MyRadio.xcodeproj` を開き、Signing & Capabilitiesで自分のApple Developer Teamと固有のBundle Identifierを選択。
-5. 実機またはシミュレーターで Run を実行。
+## まず実際の声で聴くための最短手順（個人用）
 
-## GitHub Actions / Codemagic
-- `.github/workflows/ios-check.yml` はXcodeGenをインストールし、コード署名なしのiOSシミュレータービルドを検査します。
-- `codemagic.yaml` の `ios-compile-check` は署名なしでコンパイル検査可能。
-- `codemagic.yaml` の `ios-testflight` は**Apple Developerの署名証明書、プロビジョニングプロファイル、App Store Connectで作成したアプリ**が必要。署名前にBundle IDを変更してください。
-- 現時点ではGitHub、Codemagic、App Store Connectへの公開・ビルド・審査申請は実行していません。
+1. このリポジトリをGitHubに更新し、既存の **Codemagic → `ios-testflight`** でApp Store Connectへビルドを送る。既存の Bundle ID `jp.myradio.personal` とApple登録・証明書を変えない。
+2. iPhoneの TestFlight から v0.3.0 をインストールする。
+3. OpenAIの開発者ページ <https://platform.openai.com/api-keys> から**自分専用のAPIキー**を取得（必要に応じてAPI課金を設定。ChatGPT Plus/Proとは別料金）。**APIキーをGitHub・チャットに貼り付けない**。
+4. アプリの「AI接続」→「個人用AIラジオ」で自分のキーを登録。「AI番組」タブで好きなことを詳しく登録→声を選び「実際に試聴」→「この設定でAI番組を制作」→「AI音声で再生」。この方式ではサーバーURLを**空欄**にする。
 
-## AI番組生成サーバー
-`backend/` はNode.js 20以上で起動可能なAPIです。Cloud RunのDockerfileを同梱。
+この方式は持ち主一人での実機使用を想定。キーは本人の端末の Keychain に保存され、実際の番組制作・音声化時に OpenAI API へ直接送信されます。公開販売用アプリには、ユーザー認証と利用上限・課金を備えた専用サーバーを使用してください。
 
-### ローカル（開発者向け）
-```bash
-cd backend
-export OPENAI_API_KEY='（サーバー側の秘密鍵）'
-export MYRADIO_ACCESS_TOKEN='（長いランダムな試作用トークン）'
-node server.js
-```
-- `GET /health` はヘルスチェック。
-- `POST /api/program` はBearer認証必須。入力された趣味・除外項目・直近番組などを基にOpenAI Responses APIとweb_searchで原稿生成。
-- iPhoneアプリの「AI接続」には **HTTPSのサーバーURL** を入力。ローカルのhttp://接続は許可しません。
-- OpenAIキーは**絶対にiOSコードやGitHubへ記録しない**でください。
+## 選択できる音声
 
-### Cloud Runデプロイに向けて
-1. Google Cloudでサービスの権限・API・請求先を準備。
-2. Secret Managerに `OPENAI_API_KEY` と `MYRADIO_ACCESS_TOKEN` を登録し、Cloud Runのサービスアカウントにアクセス権を付与。
-3. `backend/` のDockerfileを使ってCloud Runサービスを作成し、環境変数を設定。
-4. サービスのHTTPS URLをiPhoneの「AI接続」に登録。
+| グループ | 声ID |
+|---|---|
+| 男性系の印象 | `cedar`, `onyx`, `echo`, `ash` |
+| 女性系の印象 | `marin`, `coral`, `nova`, `shimmer` |
+| 中性的な印象 | `sage`, `alloy` |
 
-**警告：これは個人試作専用の共有トークン式です。一般販売前にはFirebase Authentication等のユーザー認証、App Check、ユーザー別の回数制限、課金連動、プライバシーポリシー、保存期間・削除への対応が必要です。**
+声の男性・女性の区分は主観的な聴感上の案内です。自然さ、抑揚、発音は音声モデル・言語・原稿に依存するため **「人間と100％同じ」は保証できません**。選択した声は実際の音声を聴いて評価してください。AI音声であることをアプリに明示しています。
 
-## 品質検証
-- `swiftc -frontend -parse MyRadio/*.swift MyRadioTests/*.swift` によるSwiftソースの構文検査。
-- `cd backend && npm test` によるAPI単体試験。
-- macOS/Xcode/iPhoneでの実機ビルド・実再生テストは未実施。署名済みIPAの作成は未実施。
+## 一般販売のためのバックエンド
 
-## 次に実装したい機能
-1. Cloud Run接続と実際のAI番組生成の確認。
-2. 長さの推定・調整、長時間音声のプリ生成、BGM、オフライン番組保存。
-3. AlarmKit（iOS 26以降）を利用できる環境での目覚ましとの連携検証。
-4. Firebase認証、課金、クォータ・監視、プライバシー整備。
-5. UIの動作確認、アクセシビリティ、TestFlight、App Store審査。
+`backend/server.js` と `backend/voice.js` は Node.js 22 のAPI（`/health`, `/api/program`, `/api/speech`）で、`backend/Dockerfile` から Google Cloud Run などへデプロイできます。OpenAI / ElevenLabs APIキーは必ず**サーバーのSecret Manager**に設定してください。
 
-著作権保護のある楽曲は無断で組み込みません。
+必須の環境変数：
+- `OPENAI_API_KEY` — AIが原稿を生成するキー。
+- `MYRADIO_ACCESS_TOKEN` — 個人テスト時のサーバー接続トークン（アプリ内「AI接続」にも入力）。一般販売前にユーザー別認証へ変更。
+- `VOICE_PROVIDER` — `openai`（標準）か `elevenlabs`（高品位・有料音声）。
+- `OPENAI_TTS_MODEL` — OpenAI Speech API 利用時。v0.3.0 の標準は `gpt-4o-mini-tts`。
+- `ELEVENLABS_API_KEY`, `ELEVENLABS_MODEL=eleven_v4`, `ELEVENLABS_VOICE_MAP` — ElevenLabs利用時。`ELEVENLABS_VOICE_MAP` にはアプリの10個の声IDと、ご自身が利用権を持つ日本語対応の声IDの対応をJSONで設定する。未設定の声は使えない。
+
+`GET /health` で `aiConfigured: true` を確認してから、iPhoneの「AI接続」にCloud Runの **HTTPS URL** と接続トークンを登録する。このときiPhoneの個人用APIキーは不要。
+
+⚠️ **重要**：OpenAIの `gpt-4o-mini-tts` など従来の Speech API 音声モデルは **2027年1月6日に提供終了予定**。長期運営する場合は `gpt-realtime-2.1-mini` への実装移行、またはこのリポジトリで用意した ElevenLabs v4 を採用してください。短期の個人実機用としては現在のSpeech APIを使用します。
+
+⚠️ **商用リリース前**：利用者ごとの認証、鍵の非公開、サーバー側の利用上限・請求制限、履歴/音声の保存規約、プライバシーポリシー、Appleのアプリ内課金、法的な音声利用権の確認が必要です。ElevenLabs商用音声には利用権を満たす有料プラン等が必要です。ニュース・投資・健康情報はAIの誤りがあり得ます。
+
+## ビルド・検査
+
+- `swiftc -frontend -parse MyRadio/*.swift MyRadioTests/*.swift` （Swiftソース構文検査）
+- `swiftc -typecheck MyRadio/RadioModels.swift MyRadio/PersonalizationEngine.swift MyRadio/VoiceCatalog.swift`（モデル構造）
+- `cd backend && npm test`（プロフィール、音声バリデーション、実際のAPIリクエスト形式、HTTPサーバー統合テスト）
+- Xcode/Codemagicで `xcodegen generate` してiOS用ビルド。**この場では実機ビルドと実際のAPIキーによる音声品質試聴は行えていません。**
+
+既存のアプリID、GitHub Actions、Codemagic署名設定と内部テストグループを変更しません。本人が登録したデータを消さないよう、v0.1/v0.2のデータ復元コードを残しています。アプリ内の保存音声はキャッシュのため、iOSの判断で削除される場合があり、その際はAPIから再生成します（費用が発生）。

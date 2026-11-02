@@ -15,9 +15,31 @@ enum ProgramError: LocalizedError {
 }
 
 enum ProgramService {
+    static func connectionStatus(endpoint: String) async -> String {
+        let text = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty {
+            return CredentialVault.readPersonalKey().isEmpty
+                ? "個人用AIキーを登録してください。"
+                : "個人用AIキーが登録されています。新しい番組を作成できます。"
+        }
+        guard let base = URL(string: text), base.scheme?.lowercased() == "https", base.host != nil else {
+            return "専用サーバーのURLが正しくありません。"
+        }
+        var request = URLRequest(url: base.appendingPathComponent("health"))
+        request.timeoutInterval = 12
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let status = try? JSONDecoder().decode(HealthResponse.self, from: data),
+                  status.status == "ok" else { return "サーバーが応答しません。URLを確認してください。" }
+            return status.aiConfigured == true
+                ? "接続成功：本番のAI番組と自然音声が利用可能な設定です。"
+                : "サーバー接続は成功しましたが、AI APIキーが未設定です。"
+        } catch { return "接続できません。サーバーの公開状態とURLを確認してください。" }
+    }
     static func generate(profile: ListenerProfile, recentTitles: [String], endpoint: String) async throws -> RadioProgram {
         let address = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !address.isEmpty else { return DemoProgram.make(profile: profile) }
+        guard !address.isEmpty else { return try await PersonalAIService.generate(profile: profile, recentTitles: recentTitles) }
         guard let url = URL(string: address),
               url.scheme?.lowercased() == "https",
               let host = url.host, !host.isEmpty,
@@ -46,22 +68,7 @@ enum ProgramService {
     }
 }
 
-enum DemoProgram {
-    static func make(profile: ListenerProfile) -> RadioProgram {
-        let nickname = profile.nickname.trimmingCharacters(in: .whitespacesAndNewlines)
-        let greeting = nickname.isEmpty ? "おはようございます" : "\(nickname)さん、おはようございます"
-        let interest = profile.interests.first ?? "最近の気になること"
-        let extra = profile.detail.isEmpty ? "気になる分野を詳しく登録すると、話題の選び方が変わります。" :
-            "詳しく登録していただいた『\(String(profile.detail.prefix(70)))』も番組の構成に取り入れます。"
-        let script = """
-        \(greeting)。マイラジオへようこそ。
-        これは、音声再生と個人設定を確認するためのお試し番組です。実際のAI生成ニュースではありません。
-        今日のテーマのひとつは『\(interest)』。あなたが興味を登録した分野を優先して番組を組み立てていきます。
-        \(extra)
-        本番のマイラジオでは、関心の強い話題を深く掘り下げ、同じ話を繰り返さないよう工夫します。必要に応じて最新の公開情報を確認し、その情報源も画面に示します。
-        気になる話題を後から追加したり、聞きたくない話題を除外することもできます。
-        今朝も素敵な一日になりますように。それでは、次回の放送をお楽しみに。
-        """
-        return RadioProgram(title: "マイラジオ・お試し放送", script: script, isSample: true)
-    }
+private struct HealthResponse: Decodable {
+    let status: String
+    let aiConfigured: Bool?
 }

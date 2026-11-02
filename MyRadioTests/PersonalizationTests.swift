@@ -21,9 +21,8 @@ final class PersonalizationTests: XCTestCase {
         let outline = PersonalizationEngine.plannedTopics(profile)
         XCTAssertEqual(outline.first?.topic, "旅行・観光")
         XCTAssertEqual(outline.first?.note, "京都の寺社や古い町並み")
-        let script = PersonalizationEngine.sample(profile).script
-        XCTAssertTrue(script.contains("京都の寺社や古い町並み"))
-        XCTAssertTrue(script.contains("旅行・観光"))
+        let preview = PersonalizationEngine.previewDescription(profile)
+        XCTAssertTrue(preview.contains("旅行・観光"))
     }
 
     func testCustomTopicAndExcludedCategory() {
@@ -35,6 +34,22 @@ final class PersonalizationTests: XCTestCase {
         let outline = PersonalizationEngine.plannedTopics(profile)
         XCTAssertFalse(outline.map(\.topic).contains("スポーツ"))
         XCTAssertTrue(outline.map(\.topic).contains("盆栽"))
-        XCTAssertTrue(PersonalizationEngine.sample(profile).script.contains("黒松の剪定"))
+        XCTAssertEqual(outline.first(where: { $0.topic == "盆栽" })?.note, "黒松の剪定")
+    }
+}
+
+final class RealRadioVoiceTests: XCTestCase {
+    func testVoiceCatalogAndSpeechChunks() {
+        XCTAssertGreaterThanOrEqual(VoiceCatalog.all.count, 8)
+        XCTAssertTrue(VoiceCatalog.all.contains(where: { $0.id == "cedar" }))
+        let chunks = SpokenScript.chunks(String(repeating: "今日は好きな音楽の話です。", count: 500))
+        XCTAssertGreaterThan(chunks.count, 1)
+        XCTAssertTrue(chunks.allSatisfy { $0.count <= 1450 })
+    }
+    func testExistingProfileWithoutVoiceDecodes() throws {
+        let old = #"{"nickname":"ラジオ好き","interests":["音楽・楽器"]}"#.data(using: .utf8)!
+        let profile = try JSONDecoder().decode(ListenerProfile.self, from: old)
+        XCTAssertEqual(profile.nickname, "ラジオ好き")
+        XCTAssertEqual(profile.voiceID, "cedar")
     }
 }

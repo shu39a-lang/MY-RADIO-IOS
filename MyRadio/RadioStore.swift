@@ -22,8 +22,9 @@ final class RadioStore: ObservableObject {
         profile = defaults.data(forKey: "myradio.profile")
             .flatMap { try? JSONDecoder().decode(ListenerProfile.self, from: $0) } ?? ListenerProfile()
         recentTitles = defaults.stringArray(forKey: "myradio.recentTitles") ?? []
-        lastProgram = defaults.data(forKey: "myradio.lastProgram")
+        let storedProgram = defaults.data(forKey: "myradio.lastProgram")
             .flatMap { try? JSONDecoder().decode(RadioProgram.self, from: $0) }
+        lastProgram = storedProgram?.isSample == true ? nil : storedProgram
         serverURL = defaults.string(forKey: "myradio.serverURL") ?? ""
     }
 
@@ -66,6 +67,7 @@ final class RadioStore: ObservableObject {
         lastProgram = nil
         serverURL = ""
         CredentialVault.delete()
+        CredentialVault.deletePersonalKey()
         NotificationService.cancel()
         errorMessage = nil
     }
