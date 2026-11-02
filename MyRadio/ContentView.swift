@@ -1,16 +1,22 @@
 import SwiftUI
 
 struct ContentView: View {
+    @State private var selection = 0
+
     var body: some View {
-        TabView {
+        TabView(selection: $selection) {
             RadioHomeView()
                 .tabItem { Label("ラジオ", systemImage: "radio") }
-            ListenerSettingsView()
+                .tag(0)
+            ListenerSettingsView(onTryRadio: { selection = 0 })
                 .tabItem { Label("好みを登録", systemImage: "slider.horizontal.3") }
+                .tag(1)
             MorningSettingsView()
                 .tabItem { Label("目覚まし", systemImage: "alarm") }
+                .tag(2)
             ConnectionSettingsView()
                 .tabItem { Label("AI接続", systemImage: "network") }
+                .tag(3)
         }
         .tint(RadioTheme.gold)
     }
@@ -19,6 +25,8 @@ struct ContentView: View {
 struct RadioHomeView: View {
     @EnvironmentObject private var store: RadioStore
     @EnvironmentObject private var player: SpeechPlayer
+
+    private var focused: [ProgramFocus] { PersonalizationEngine.plannedTopics(store.profile) }
 
     var body: some View {
         NavigationStack {
@@ -35,22 +43,86 @@ struct RadioHomeView: View {
                         }
                         Spacer()
                         Image(systemName: "waveform.circle.fill")
-                            .font(.system(size: 53)).foregroundStyle(RadioTheme.gold)
+                            .font(.system(size: 50)).foregroundStyle(RadioTheme.gold)
                     }
                     .padding(.top, 14)
 
                     RadioPanel {
-                        VStack(alignment: .leading, spacing: 15) {
-                            Label("今日の番組をつくる", systemImage: "sparkles")
-                                .font(.title3.weight(.bold))
-                            Text("登録した関心や好みから、番組を組み立てます。")
-                                .font(.subheadline).foregroundStyle(RadioTheme.pale)
+                        VStack(alignment: .leading, spacing: 14) {
                             HStack {
-                                Label("\(store.profile.validMinutes)分番組", systemImage: "clock")
+                                Label("あなたの番組設計", systemImage: "person.crop.circle.badge.checkmark")
+                                    .font(.headline)
                                 Spacer()
-                                Text(store.serverURL.isEmpty ? "お試しモード" : "AI生成モード")
+                                Text("\(store.profile.selectedTopics.count)テーマ")
+                                    .font(.caption).foregroundStyle(RadioTheme.gold)
+                            }
+                            let identity = [
+                                store.profile.nickname.isEmpty ? "" : "お名前：\(store.profile.nickname)",
+                                store.profile.ageGroup == "回答しない" ? "" : store.profile.ageGroup,
+                                store.profile.gender == "回答しない" ? "" : store.profile.gender,
+                                store.profile.area
+                            ].filter { !$0.isEmpty }.joined(separator: " / ")
+                            if !identity.isEmpty {
+                                Text(identity)
+                                    .font(.caption).foregroundStyle(RadioTheme.pale)
+                            }
+                            Text(PersonalizationEngine.previewDescription(store.profile))
+                                .font(.subheadline).foregroundStyle(RadioTheme.pale)
+                            if focused.isEmpty {
+                                Text("好みの登録で話題を選ぶと、ここに番組の構成が表示されます。")
+                                    .font(.caption).foregroundStyle(RadioTheme.gold)
+                            }
+                            ForEach(focused) { focus in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack(spacing: 9) {
+                                        Text(focus.label)
+                                            .font(.caption2.weight(.bold))
+                                            .foregroundStyle(focus.importance == 3 ? RadioTheme.ink : RadioTheme.gold)
+                                            .padding(.horizontal, 8).padding(.vertical, 5)
+                                            .background(focus.importance == 3 ? RadioTheme.gold : RadioTheme.gold.opacity(0.13), in: Capsule())
+                                        Text(focus.topic).font(.subheadline.weight(.semibold))
+                                    }
+                                    if !focus.note.isEmpty {
+                                        Text("詳しく：\(focus.note)")
+                                            .font(.caption).foregroundStyle(RadioTheme.pale)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 3)
+                            }
+                            if !store.profile.favoritePeople.isEmpty {
+                                Text("好きな人物・作品：\(store.profile.favoritePeople)")
+                                    .font(.caption).foregroundStyle(RadioTheme.pale)
+                            }
+                            if !store.profile.avoid.isEmpty {
+                                Text("避ける話題：\(store.profile.avoid)")
+                                    .font(.caption).foregroundStyle(RadioTheme.pale)
+                            }
+                            if !store.profile.detail.isEmpty {
+                                Text("自由入力：\(store.profile.detail)")
+                                    .font(.caption).foregroundStyle(RadioTheme.pale)
+                                    .lineLimit(4)
+                            }
+                            Text("目的：\(store.profile.listeningGoal) / ニュース：\(store.profile.includeNews ? "あり" : "なし")")
+                                .font(.caption).foregroundStyle(RadioTheme.pale)
+                            HStack {
+                                Label("\(store.profile.validMinutes)分", systemImage: "clock")
+                                Spacer()
+                                Label(store.serverURL.isEmpty ? "試聴モード" : "AI接続モード", systemImage: "antenna.radiowaves.left.and.right")
                             }
                             .font(.caption).foregroundStyle(RadioTheme.gold)
+                        }
+                    }
+
+                    RadioPanel {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Label("今の好みで番組を作る", systemImage: "sparkles")
+                                .font(.title3.weight(.bold))
+                            Text(store.serverURL.isEmpty
+                                 ? "まずは個人設定を反映した短いお試し番組を作り、原稿表示と音声を確認できます。"
+                                 : "登録した優先度・詳しい好みをAIに渡して番組を作ります。")
+                                .font(.subheadline).foregroundStyle(RadioTheme.pale)
                             Button {
                                 player.stop()
                                 Task { await store.generate() }
@@ -59,7 +131,7 @@ struct RadioHomeView: View {
                                     Spacer()
                                     if store.isGenerating { ProgressView().tint(RadioTheme.ink) }
                                     else { Image(systemName: "wand.and.stars") }
-                                    Text(store.isGenerating ? "番組を制作しています…" : "新しい番組をつくる")
+                                    Text(store.isGenerating ? "番組を制作しています…" : "今の設定で番組を作成")
                                     Spacer()
                                 }
                                 .font(.headline)
@@ -81,19 +153,16 @@ struct RadioHomeView: View {
                                     Text("NOW ON AIR").font(.caption.weight(.bold)).tracking(2)
                                     Spacer()
                                     if program.isSample {
-                                        Text("お試し音声")
+                                        Text("お試し放送")
                                             .font(.caption2).padding(.horizontal, 9).padding(.vertical, 5)
                                             .background(.white.opacity(0.1), in: Capsule())
                                     }
                                 }
                                 Text(program.title).font(.title2.weight(.bold))
-                                if program.isSample {
-                                    Text("これは短い操作確認用の原稿です。AIニュースや10分番組ではありません。")
-                                        .font(.caption).foregroundStyle(RadioTheme.pale)
-                                } else {
-                                    Text("AIが作成した番組・音声は端末の日本語読み上げを使用")
-                                        .font(.caption).foregroundStyle(RadioTheme.pale)
-                                }
+                                Text(program.isSample
+                                     ? "選んだ話題・優先度・詳しい好みを反映した短い見本です。最新ニュースや10分間のAI放送ではありません。"
+                                     : "AI制作番組です。iPhoneの日本語音声で読み上げます。")
+                                    .font(.caption).foregroundStyle(RadioTheme.pale)
                                 HStack(spacing: 12) {
                                     Button {
                                         if !player.isSpeaking { player.play(program, style: store.profile.style) }
@@ -101,9 +170,9 @@ struct RadioHomeView: View {
                                     } label: {
                                         Label(!player.isSpeaking ? "再生" : (player.isPaused ? "再開" : "一時停止"),
                                               systemImage: !player.isSpeaking ? "play.fill" : (player.isPaused ? "play.fill" : "pause.fill"))
-                                        .frame(maxWidth: .infinity).padding(14)
-                                        .background(RadioTheme.gold, in: RoundedRectangle(cornerRadius: 13))
-                                        .foregroundStyle(RadioTheme.ink)
+                                            .frame(maxWidth: .infinity).padding(14)
+                                            .background(RadioTheme.gold, in: RoundedRectangle(cornerRadius: 13))
+                                            .foregroundStyle(RadioTheme.ink)
                                     }
                                     .accessibilityIdentifier("playProgram")
                                     Button { player.stop() } label: {
@@ -113,14 +182,13 @@ struct RadioHomeView: View {
                                     }
                                     .disabled(!player.isSpeaking)
                                 }
-                                Button {
-                                    store.recordLike()
-                                } label: {
-                                    Label("この話題をもっと聞きたい", systemImage: "hand.thumbsup")
-                                        .font(.subheadline)
+                                if !program.isSample {
+                                    Button { store.recordLike() } label: {
+                                        Label("この番組をもっと聞きたい", systemImage: "hand.thumbsup")
+                                            .font(.subheadline)
+                                    }
+                                    .foregroundStyle(RadioTheme.gold)
                                 }
-                                .disabled(program.isSample)
-                                .foregroundStyle(RadioTheme.gold)
                                 DisclosureGroup("番組の原稿を読む") {
                                     Text(program.script)
                                         .font(.body).lineSpacing(6).textSelection(.enabled)
@@ -129,8 +197,7 @@ struct RadioHomeView: View {
                                 .font(.subheadline)
                                 if !program.sources.isEmpty {
                                     VStack(alignment: .leading, spacing: 8) {
-                                        Text("ニュースの情報源")
-                                            .font(.subheadline.weight(.semibold))
+                                        Text("情報源").font(.subheadline.weight(.semibold))
                                         ForEach(program.sources) { source in
                                             if let url = URL(string: source.url), url.scheme == "https" {
                                                 Link(destination: url) {
@@ -146,22 +213,19 @@ struct RadioHomeView: View {
                     } else {
                         RadioPanel {
                             VStack(alignment: .leading, spacing: 9) {
-                                Label("最初の一歩", systemImage: "headphones")
-                                    .font(.headline)
-                                Text("「好みを登録」で好きな分野を設定し、番組を作ってみましょう。AIを接続しなくても、短いお試し放送を聞けます。")
+                                Label("最初の一歩", systemImage: "headphones").font(.headline)
+                                Text("「好みを登録」で好きな話題を詳しく設定し、番組を作ってください。AI未接続でも音声で試せます。")
                                     .font(.subheadline).foregroundStyle(RadioTheme.pale)
                             }
                         }
                     }
 
                     if let message = store.errorMessage {
-                        Text(message)
-                            .font(.subheadline).foregroundStyle(.red)
-                            .padding(12)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(message).font(.subheadline).foregroundStyle(.red)
+                            .padding(12).frame(maxWidth: .infinity, alignment: .leading)
                             .background(.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
                     }
-                    Text("読み上げ音声はAI・音声合成技術によるもので、人間の生放送ではありません。")
+                    Text("音声はコンピューターによる読み上げです。AI生成には別途サーバー接続が必要です。")
                         .font(.caption2).foregroundStyle(RadioTheme.pale)
                 }
                 .padding(20)
@@ -174,10 +238,71 @@ struct RadioHomeView: View {
 
 struct ListenerSettingsView: View {
     @EnvironmentObject private var store: RadioStore
+    let onTryRadio: () -> Void
+    @State private var newTopic = ""
+    @State private var addError = ""
+
+    private func importanceBinding(_ topic: String) -> Binding<Int> {
+        Binding(get: { store.profile.importance(for: topic) },
+                set: { store.profile.topicImportance[topic] = $0 })
+    }
+
+    private func noteBinding(_ topic: String) -> Binding<String> {
+        Binding(get: { store.profile.topicNotes[topic] ?? "" },
+                set: { store.profile.topicNotes[topic] = String($0.prefix(300)) })
+    }
+
+    private func addTopic() {
+        let cleaned = newTopic.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return }
+        guard cleaned.count <= 45 else { addError = "45文字以内で入力してください。"; return }
+        guard !store.profile.selectedTopics.contains(cleaned) else { addError = "すでに登録されています。"; return }
+        guard store.profile.customTopics.count < 15 else { addError = "自由テーマは15件までです。"; return }
+        store.profile.customTopics.append(cleaned)
+        store.profile.topicImportance[cleaned] = 3
+        newTopic = ""
+        addError = ""
+    }
+
+    private func topicEditor(_ topic: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Picker("興味の強さ", selection: importanceBinding(topic)) {
+                Text("少し").tag(1)
+                Text("好き").tag(2)
+                Text("最優先").tag(3)
+            }
+            .pickerStyle(.segmented)
+            TextField("具体的に何を聞きたい？（例：70年代のフォーク）", text: noteBinding(topic), axis: .vertical)
+                .lineLimit(2...4)
+                .font(.subheadline)
+                .accessibilityIdentifier("topicNote-\(topic)")
+        }
+        .padding(.vertical, 6)
+    }
 
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    VStack(alignment: .leading, spacing: 9) {
+                        Label("あなた向けの番組プレビュー", systemImage: "waveform.path")
+                            .font(.headline).foregroundStyle(RadioTheme.gold)
+                        Text(PersonalizationEngine.previewDescription(store.profile))
+                            .font(.subheadline)
+                        Text("\(store.profile.selectedTopics.count)個の話題・\(store.profile.validMinutes)分・\(store.profile.depth)")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button {
+                            store.errorMessage = nil
+                            store.makeSample()
+                            onTryRadio()
+                        } label: {
+                            Label("設定を反映した番組を表示", systemImage: "play.circle.fill")
+                                .font(.headline)
+                        }
+                        .foregroundStyle(RadioTheme.gold)
+                    }
+                    .padding(.vertical, 5)
+                }
                 Section {
                     TextField("呼ばれたい名前（任意）", text: $store.profile.nickname)
                     Picker("年齢層（任意）", selection: $store.profile.ageGroup) {
@@ -187,51 +312,72 @@ struct ListenerSettingsView: View {
                         ForEach(["回答しない", "男性", "女性", "その他"], id: \.self) { Text($0) }
                     }
                     TextField("地域（任意・例：東京都）", text: $store.profile.area)
-                } header: {
-                    Text("あなたについて")
-                } footer: {
-                    Text("年齢・性別は空欄でも使えます。興味・関心を優先して番組を作ります。")
-                }
+                } header: { Text("あなたについて") }
+                footer: { Text("年齢・性別は必須ではありません。番組は興味・関心を優先します。") }
 
-                Section("興味のある分野（複数選択可）") {
-                    ForEach(ListenerProfile.interestOptions, id: \.self) { item in
+                Section {
+                    ForEach(ListenerProfile.interestOptions, id: \.self) { topic in
+                        let selected = store.profile.interests.contains(topic)
                         Button {
-                            if store.profile.interests.contains(item) {
-                                store.profile.interests.removeAll { $0 == item }
-                            } else {
-                                store.profile.interests.append(item)
-                            }
+                            if selected { store.profile.interests.removeAll { $0 == topic } }
+                            else { store.profile.interests.append(topic) }
                         } label: {
                             HStack {
-                                Text(item).foregroundStyle(.primary)
+                                Text(topic).foregroundStyle(.primary)
                                 Spacer()
-                                if store.profile.interests.contains(item) {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(RadioTheme.gold)
+                                if selected {
+                                    if store.profile.importance(for: topic) == 3 {
+                                        Text("最優先").font(.caption).foregroundStyle(RadioTheme.gold)
+                                    }
+                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(RadioTheme.gold)
+                                } else {
+                                    Image(systemName: "circle").foregroundStyle(.secondary)
                                 }
                             }
                         }
+                        if selected { topicEditor(topic) }
                     }
-                }
+                } header: { Text("興味のある分野") }
+                footer: { Text("分野を選ぶと、興味の強さと具体的な内容を登録できます。「最優先」の話題から番組を組み立てます。") }
+
+                Section {
+                    HStack {
+                        TextField("自分だけの話題を追加", text: $newTopic)
+                            .onSubmit(addTopic)
+                        Button("追加", action: addTopic).disabled(newTopic.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    if !addError.isEmpty { Text(addError).font(.caption).foregroundStyle(.red) }
+                    ForEach(store.profile.customTopics, id: \.self) { topic in
+                        HStack {
+                            Text(topic).font(.subheadline.weight(.semibold))
+                            Spacer()
+                            Button(role: .destructive) {
+                                store.profile.customTopics.removeAll { $0 == topic }
+                                store.profile.topicNotes.removeValue(forKey: topic)
+                                store.profile.topicImportance.removeValue(forKey: topic)
+                            } label: { Image(systemName: "trash") }
+                        }
+                        topicEditor(topic)
+                    }
+                } header: { Text("カテゴリーにない趣味・こだわり") }
+                footer: { Text("好きな歌手、車種、釣り方、特定の歴史人物など、細かいテーマも自由に登録できます。") }
+
                 Section {
                     TextEditor(text: $store.profile.detail)
-                        .frame(minHeight: 110)
-                        .accessibilityLabel("詳しい興味や好きなこと")
-                } header: {
-                    Text("具体的な趣味・好み（最重要）")
-                } footer: {
-                    Text("例：1970年代のフォーク、アコースティックギター、成長株の分析、歴史的な街並み。具体的に書くほど番組に反映しやすくなります。")
-                }
+                        .frame(minHeight: 100)
+                        .accessibilityLabel("趣味の詳しい希望")
+                    TextField("好きな人物・作品・番組（任意）", text: $store.profile.favoritePeople, axis: .vertical)
+                        .lineLimit(2...5)
+                } header: { Text("自由に伝えたいこと") }
+                footer: { Text("例：1970年代の日本のフォークが好き。特にアコースティックギターの弾き語りについて知りたい。") }
+
                 Section {
-                    TextEditor(text: $store.profile.avoid)
-                        .frame(minHeight: 75)
-                        .accessibilityLabel("聞きたくない話題")
-                } header: {
-                    Text("聞きたくない話題")
-                } footer: {
-                    Text("個人情報は端末に保存され、AI番組生成時のみ接続先サーバーへ送信します。")
-                }
-                Section("番組スタイル") {
+                    Picker("聴く目的", selection: $store.profile.listeningGoal) {
+                        ForEach(ListenerProfile.goalOptions, id: \.self) { Text($0) }
+                    }
+                    Picker("説明の深さ", selection: $store.profile.depth) {
+                        ForEach(ListenerProfile.depthOptions, id: \.self) { Text($0) }
+                    }
                     Picker("話し方", selection: $store.profile.style) {
                         ForEach(["親しみやすいDJ", "落ち着いた解説", "元気なDJ"], id: \.self) { Text($0) }
                     }
@@ -240,7 +386,21 @@ struct ListenerSettingsView: View {
                         Text("10分").tag(10)
                         Text("20分").tag(20)
                     }
-                }
+                    Toggle("確認できた最新ニュースも聞く", isOn: $store.profile.includeNews)
+                } header: { Text("番組の仕上げ") }
+                footer: { Text("AI未接続時は短い見本のみです。選んだ時間の本番番組と最新ニュースは、AIサーバーへの接続後に利用できます。") }
+
+                Section {
+                    TextEditor(text: $store.profile.avoid)
+                        .frame(minHeight: 80)
+                        .accessibilityLabel("避けたい話題")
+                } header: { Text("聞きたくないこと") }
+                footer: { Text("話題や単語を「、」で区切ってください。AI番組生成時にも避けるよう指示します。") }
+
+                Section {
+                    Text("入力内容は自動でiPhoneに保存されます。アプリを閉じても残ります。")
+                    Text("AIサーバーが接続されている場合だけ、番組制作のために設定した情報をサーバーへ送信します。")
+                } header: { Text("保存とプライバシー") }
             }
             .scrollContentBackground(.hidden)
             .background(RadioTheme.ink)

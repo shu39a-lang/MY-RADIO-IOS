@@ -48,20 +48,6 @@ enum ProgramService {
 
 enum DemoProgram {
     static func make(profile: ListenerProfile) -> RadioProgram {
-        let nickname = profile.nickname.trimmingCharacters(in: .whitespacesAndNewlines)
-        let greeting = nickname.isEmpty ? "おはようございます" : "\(nickname)さん、おはようございます"
-        let interest = profile.interests.first ?? "最近の気になること"
-        let extra = profile.detail.isEmpty ? "気になる分野を詳しく登録すると、話題の選び方が変わります。" :
-            "詳しく登録していただいた『\(String(profile.detail.prefix(70)))』も番組の構成に取り入れます。"
-        let script = """
-        \(greeting)。マイラジオへようこそ。
-        これは、音声再生と個人設定を確認するためのお試し番組です。実際のAI生成ニュースではありません。
-        今日のテーマのひとつは『\(interest)』。あなたが興味を登録した分野を優先して番組を組み立てていきます。
-        \(extra)
-        本番のマイラジオでは、関心の強い話題を深く掘り下げ、同じ話を繰り返さないよう工夫します。必要に応じて最新の公開情報を確認し、その情報源も画面に示します。
-        気になる話題を後から追加したり、聞きたくない話題を除外することもできます。
-        今朝も素敵な一日になりますように。それでは、次回の放送をお楽しみに。
-        """
-        return RadioProgram(title: "マイラジオ・お試し放送", script: script, isSample: true)
+        PersonalizationEngine.sample(profile)
     }
 }

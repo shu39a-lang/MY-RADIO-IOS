@@ -53,6 +53,10 @@ final class RadioStore: ObservableObject {
         }
     }
 
+    func makeSample() {
+        lastProgram = DemoProgram.make(profile: profile)
+    }
+
     func recordLike() {
         guard let title = lastProgram?.title else { return }
         if !profile.preferredTopics.contains(title) {
