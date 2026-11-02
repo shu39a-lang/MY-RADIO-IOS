@@ -32,20 +32,41 @@ struct RadioHomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("GOOD MORNING RADIO")
-                                .font(.caption2.weight(.bold)).tracking(2.4).foregroundStyle(RadioTheme.gold)
+                    HStack(alignment: .center, spacing: 14) {
+                        ZStack {
+                            Circle()
+                                .fill(LinearGradient(colors: [RadioTheme.gold.opacity(0.95), Color(red: 0.56, green: 0.41, blue: 0.28)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                                .frame(width: 62, height: 62)
+                            Circle()
+                                .stroke(RadioTheme.pale.opacity(0.85), lineWidth: 2)
+                                .frame(width: 52, height: 52)
+                            Image(systemName: "dot.radiowaves.left.and.right")
+                                .font(.system(size: 25, weight: .bold))
+                                .foregroundStyle(RadioTheme.ink)
+                        }
+                        VStack(alignment: .leading, spacing: 6) {
                             Text("MY RADIO")
-                                .font(.system(size: 40, weight: .black, design: .rounded))
-                            Text("世界にひとつ、あなただけの放送局。")
-                                .font(.subheadline).foregroundStyle(RadioTheme.pale)
+                                .font(.system(size: 34, weight: .bold, design: .serif))
+                                .tracking(1.2)
+                                .foregroundStyle(RadioTheme.pale)
+                            Text("世界に1つ、あなただけの放送局")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(RadioTheme.gold)
                         }
                         Spacer()
-                        Image(systemName: "waveform.circle.fill")
-                            .font(.system(size: 50)).foregroundStyle(RadioTheme.gold)
                     }
                     .padding(.top, 14)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 18)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(LinearGradient(colors: [Color(red: 0.35, green: 0.24, blue: 0.18), Color(red: 0.20, green: 0.15, blue: 0.13)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .stroke(RadioTheme.gold.opacity(0.7), lineWidth: 1.5)
+                            )
+                            .shadow(color: .black.opacity(0.25), radius: 12, y: 6)
+                    )
 
                     RadioPanel {
                         VStack(alignment: .leading, spacing: 14) {
@@ -117,9 +138,9 @@ struct RadioHomeView: View {
 
                     RadioPanel {
                         VStack(alignment: .leading, spacing: 14) {
-                            Label("今の好みで番組を作る", systemImage: "sparkles")
+                            Label("この設定で放送を作る", systemImage: "sparkles")
                                 .font(.title3.weight(.bold))
-                            Text("登録した趣味と興味から、その場で新しいAIラジオ番組を制作します。初回は「AI接続」で個人用APIキーを登録してください。")
+                            Text("登録した趣味と興味を使って、その場であなただけの放送を作ります。初回だけ「AI接続」で個人用APIキーを登録してください。")
                                 .font(.subheadline).foregroundStyle(RadioTheme.pale)
                             Button {
                                 player.stop()
@@ -129,7 +150,7 @@ struct RadioHomeView: View {
                                     Spacer()
                                     if store.isGenerating { ProgressView().tint(RadioTheme.ink) }
                                     else { Image(systemName: "wand.and.stars") }
-                                    Text(store.isGenerating ? "番組を制作しています…" : "今の設定で番組を作成")
+                                    Text(store.isGenerating ? "放送を制作しています…" : "今の設定で放送を作成")
                                     Spacer()
                                 }
                                 .font(.headline)
@@ -153,7 +174,7 @@ struct RadioHomeView: View {
 
                                 }
                                 Text(program.title).font(.title2.weight(.bold))
-                                Text("あなたの個人設定をもとにAIが制作。選択した声で自然な日本語音声を生成します。")
+                                Text("あなたの個人設定をもとに放送を制作し、選択した声で自然な日本語音声を再生します。")
                                     .font(.caption).foregroundStyle(RadioTheme.pale)
                                 HStack(spacing: 12) {
                                     Button {
@@ -299,14 +320,14 @@ struct ListenerSettingsView: View {
                                 if store.errorMessage == nil { onTryRadio() }
                             }
                         } label: {
-                            Label(store.isGenerating ? "本番番組を制作中…" : "この設定でAI番組を制作", systemImage: "sparkles")
+                            Label(store.isGenerating ? "本番放送を制作中…" : "この設定で放送を制作", systemImage: "sparkles")
                                 .font(.headline)
                         }
                         .disabled(store.isGenerating || store.profile.selectedTopics.isEmpty)
                         if let message = store.errorMessage {
                             Text(message).font(.caption).foregroundStyle(.red)
                         }
-                        
+                        .foregroundStyle(RadioTheme.gold)
                     }
                     .padding(.vertical, 5)
                 }
@@ -433,7 +454,7 @@ struct ListenerSettingsView: View {
                 } header: { Text("保存とプライバシー") }
             }
             .scrollContentBackground(.hidden)
-            .background(RadioTheme.ink)
+            .background(LinearGradient(colors: [Color(red: 0.145, green: 0.118, blue: 0.110), RadioTheme.ink], startPoint: .topLeading, endPoint: .bottomTrailing))
             .navigationTitle("あなたの好み")
         }
     }
@@ -485,7 +506,7 @@ struct MorningSettingsView: View {
                 }
             }
             .scrollContentBackground(.hidden)
-            .background(RadioTheme.ink)
+            .background(LinearGradient(colors: [Color(red: 0.145, green: 0.118, blue: 0.110), RadioTheme.ink], startPoint: .topLeading, endPoint: .bottomTrailing))
             .navigationTitle("おはようラジオ")
         }
     }
@@ -569,7 +590,7 @@ struct ConnectionSettingsView: View {
                 }
             }
             .scrollContentBackground(.hidden)
-            .background(RadioTheme.ink)
+            .background(LinearGradient(colors: [Color(red: 0.145, green: 0.118, blue: 0.110), RadioTheme.ink], startPoint: .topLeading, endPoint: .bottomTrailing))
             .navigationTitle("AI接続とデータ")
             .onAppear {
                 token = CredentialVault.read()
