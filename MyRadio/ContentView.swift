@@ -306,7 +306,7 @@ struct ListenerSettingsView: View {
                         if let message = store.errorMessage {
                             Text(message).font(.caption).foregroundStyle(.red)
                         }
-                        .foregroundStyle(RadioTheme.gold)
+                        
                     }
                     .padding(.vertical, 5)
                 }
