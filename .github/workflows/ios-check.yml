@@ -1,6 +1,4 @@
-
 name: MY RADIO iOS compile check
-
 on:
   push:
   pull_request:
@@ -11,6 +9,11 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.3'
+      - name: Verify Xcode version
+        run: xcodebuild -version
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate project
@@ -18,7 +21,6 @@ jobs:
       - name: Build iPhone app
         run: |
           xcodebuild -project MyRadio.xcodeproj -scheme MyRadio -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
-
   api:
     runs-on: ubuntu-latest
     steps:
