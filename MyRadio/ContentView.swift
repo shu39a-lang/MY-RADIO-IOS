@@ -4,384 +4,387 @@ import AVFoundation
 import UserNotifications
 
 struct ContentView: View {
-    var body: some View {
-        MyRadioHTMLView()
-            .ignoresSafeArea(.container, edges: .bottom)
-            .preferredColorScheme(.dark)
-    }
+var body: some View {
+MyRadioHTMLView()
+.ignoresSafeArea(.container, edges: .bottom)
+.preferredColorScheme(.dark)
+}
 }
 
 private struct MyRadioHTMLView: UIViewRepresentable {
-    func makeCoordinator() -> Coordinator { Coordinator() }
+func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeUIView(context: Context) -> WKWebView {
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = .default()
-        config.allowsInlineMediaPlayback = true
-        let controller = WKUserContentController()
-        controller.add(context.coordinator, name: "radio")
-        let keys = ["myradio", "myradio_played", "myradio_req", "myradio_dv", "myradio_hist", "myradio_unique_v1"]
-        let saved = keys.compactMap { key -> [String: String]? in
-            guard let val = UserDefaults.standard.string(forKey: "radio.saved." + key) else { return nil }
-            return ["key":key, "value":val]
-        }
-        if let bytes = try? JSONSerialization.data(withJSONObject: saved),
-           let literal = String(data: bytes, encoding: .utf8) {
-            let source = "window.__myradioSaved=Object.fromEntries(" + literal + ".map(e=>[e.key,e.value]));try{for(const e of " + literal + "){localStorage.setItem(e.key,e.value)}}catch(e){}"
-            controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        }
-        config.userContentController = controller
-        let web = WKWebView(frame: .zero, configuration: config)
-        web.isOpaque = false
-        web.backgroundColor = UIColor(red: 0.13, green: 0.11, blue: 0.11, alpha: 1)
-        web.scrollView.contentInsetAdjustmentBehavior = .never
-        web.navigationDelegate = context.coordinator
-        context.coordinator.web = web
-        UNUserNotificationCenter.current().delegate = context.coordinator
-        // All display content and articles are compiled into ContentView.swift.
-        // This removes the fragile external radio.html copy-resource requirement.
-        do {
-            let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let url = folder.appendingPathComponent("myradio-screen-v045.html")
-            try EmbeddedRadioPage.html.write(to: url, atomically: true, encoding: .utf8)
-            web.loadFileURL(url, allowingReadAccessTo: folder)
-        } catch {
-            // Even if the file system is temporarily unavailable, the HTML itself remains in the binary.
-            web.loadHTMLString(EmbeddedRadioPage.html, baseURL: nil)
-        }
-        return web
+func makeUIView(context: Context) -> WKWebView {
+    let config = WKWebViewConfiguration()
+    config.websiteDataStore = .default()
+    config.allowsInlineMediaPlayback = true
+    let controller = WKUserContentController()
+    controller.add(context.coordinator, name: "radio")
+    let keys = ["myradio", "myradio_played", "myradio_req", "myradio_dv", "myradio_hist", "myradio_unique_v1"]
+    let saved = keys.compactMap { key -> [String: String]? in
+        guard let val = UserDefaults.standard.string(forKey: "radio.saved." + key) else { return nil }
+        return ["key":key, "value":val]
     }
+    if let bytes = try? JSONSerialization.data(withJSONObject: saved),
+       let literal = String(data: bytes, encoding: .utf8) {
+        let source = "window.__myradioSaved=Object.fromEntries(" + literal + ".map(e=>[e.key,e.value]));try{for(const e of " + literal + "){localStorage.setItem(e.key,e.value)}}catch(e){}"
+        controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+    }
+    config.userContentController = controller
+    let web = WKWebView(frame: .zero, configuration: config)
+    web.isOpaque = false
+    web.backgroundColor = UIColor(red: 0.13, green: 0.11, blue: 0.11, alpha: 1)
+    web.scrollView.contentInsetAdjustmentBehavior = .never
+    web.navigationDelegate = context.coordinator
+    context.coordinator.web = web
+    UNUserNotificationCenter.current().delegate = context.coordinator
+    // All display content and articles are compiled into ContentView.swift.
+    // This removes the fragile external radio.html copy-resource requirement.
+    do {
+        let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent("myradio-screen-v045.html")
+        try EmbeddedRadioPage.html.write(to: url, atomically: true, encoding: .utf8)
+        web.loadFileURL(url, allowingReadAccessTo: folder)
+    } catch {
+        // Even if the file system is temporarily unavailable, the HTML itself remains in the binary.
+        web.loadHTMLString(EmbeddedRadioPage.html, baseURL: nil)
+    }
+    return web
+}
 
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
+func updateUIView(_ uiView: WKWebView, context: Context) {}
 
-    final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, AVSpeechSynthesizerDelegate, UNUserNotificationCenterDelegate {
-        weak var web: WKWebView?
-        private let speech = AVSpeechSynthesizer()
-        private var currentID: Int?
-        private var pendingLaunchFromNotification = false
-        private let notificationID = "jp.myradio.personal.morning"
+final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate, AVSpeechSynthesizerDelegate, UNUserNotificationCenterDelegate {
+    weak var web: WKWebView?
+    private let speech = AVSpeechSynthesizer()
+    private var currentID: Int?
+    private var pendingLaunchFromNotification = false
+    private let notificationID = "jp.myradio.personal.morning"
 
-        override init() { super.init(); speech.delegate = self }
+    override init() { super.init(); speech.delegate = self }
 
-        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard message.name == "radio", let payload = message.body as? [String: Any],
-                  let type = payload["type"] as? String else { return }
-            switch type {
-            case "speak":
-                guard let text = payload["text"] as? String, let id = payload["id"] as? Int else { return }
-                speak(text, id: id, payload: payload)
-            case "cancel":
-                currentID = nil
-                speech.stopSpeaking(at: .immediate)
-            case "persist":
-                guard let key = payload["key"] as? String,
-                      ["myradio", "myradio_played", "myradio_req", "myradio_dv", "myradio_hist", "myradio_unique_v1"].contains(key),
-                      let value = payload["value"] as? String, value.count < 10000000 else { return }
-                UserDefaults.standard.set(value, forKey: "radio.saved." + key)
-            case "lookup": lookupEncyclopedia(payload)
-            case "dailyLookup": lookupDaily(payload)
-            case "newsLookup": lookupNews(payload)
-            case "schedule": scheduleAlarm(payload)
-            case "cancelAlarm":
-                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [notificationID])
-                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [notificationID])
-            default: break
-            }
-        }
-
-        // Free encyclopedia lookup; no AI key or per-request AI charges.
-        // The retrieved content is attributed to Japanese Wikipedia in the UI.
-        private func lookupEncyclopedia(_ payload: [String: Any]) {
-            guard let id = payload["id"] as? Int,
-                  let raw = payload["query"] as? String else { return }
-            let query = String(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(100))
-            guard !query.isEmpty else { return }
-
-            var components = URLComponents(string: "https://ja.wikipedia.org/w/api.php")!
-            components.queryItems = [
-                URLQueryItem(name: "action", value: "query"),
-                URLQueryItem(name: "generator", value: "search"),
-                URLQueryItem(name: "gsrsearch", value: query),
-                URLQueryItem(name: "gsrlimit", value: "1"),
-                URLQueryItem(name: "gsrnamespace", value: "0"),
-                URLQueryItem(name: "prop", value: "extracts"),
-                URLQueryItem(name: "exsectionformat", value: "plain"),
-                URLQueryItem(name: "explaintext", value: "1"),
-                URLQueryItem(name: "exchars", value: "2600"),
-                URLQueryItem(name: "redirects", value: "1"),
-                URLQueryItem(name: "format", value: "json"),
-                URLQueryItem(name: "formatversion", value: "2")
-            ]
-            guard let url = components.url else { lookupResponse(id: id, title: "", text: "", url: ""); return }
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 12
-            request.setValue("MY-RADIO-IOS/0.4.2 (https://github.com/shu39a-lang/MY-RADIO-IOS)", forHTTPHeaderField: "User-Agent")
-            URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-                guard let self = self else { return }
-                guard error == nil,
-                      let http = response as? HTTPURLResponse,
-                      (200...299).contains(http.statusCode),
-                      let data = data,
-                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let result = obj["query"] as? [String: Any],
-                      let pages = result["pages"] as? [[String: Any]],
-                      let page = pages.first,
-                      let title = page["title"] as? String,
-                      let extract = page["extract"] as? String else {
-                    self.lookupResponse(id: id, title: "", text: "", url: "")
-                    return
-                }
-                let description = String(extract.trimmingCharacters(in: .whitespacesAndNewlines).prefix(2600))
-                guard !description.isEmpty else {
-                    self.lookupResponse(id: id, title: "", text: "", url: "")
-                    return
-                }
-                let wikiURL = "https://ja.wikipedia.org/wiki/" + (title.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "")
-                self.lookupResponse(id: id, title: title, text: description, url: wikiURL)
-            }.resume()
-        }
-
-        private final class NewsRSSParser: NSObject, XMLParserDelegate {
-            var items: [[String: String]] = []
-            private var item: [String: String]? = nil
-            private var field = ""
-            func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String]) {
-                if name == "item" { item = [:] }
-                field = name
-                if name == "source", item != nil { item?["sourceURL"] = attributes["url"] ?? "" }
-            }
-            func parser(_ parser: XMLParser, foundCharacters string: String) {
-                guard item != nil, ["title", "link", "pubDate", "source", "guid"].contains(field) else { return }
-                item?[field, default: ""] += string
-            }
-            func parser(_ parser: XMLParser, foundCDATA data: Data) {
-                if let value = String(data: data, encoding: .utf8) { self.parser(parser, foundCharacters: value) }
-            }
-            func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
-                if name == "item", let value = item { items.append(value); item = nil }
-                field = ""
-            }
-        }
-
-        private func lookupNews(_ payload: [String: Any]) {
-            guard let id = payload["id"] as? Int, let rawQuery = payload["query"] as? String else { return }
-            let query = String(rawQuery.prefix(100))
-            var components = URLComponents(string: "https://news.google.com/rss/search")!
-            components.queryItems = [URLQueryItem(name: "q", value: query + " when:1d"),
-                URLQueryItem(name: "hl", value: "ja"), URLQueryItem(name: "gl", value: "JP"), URLQueryItem(name: "ceid", value: "JP:ja")]
-            guard let url = components.url else { return }
-            var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
-            request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
-            request.setValue("MyRadio/0.4.5", forHTTPHeaderField: "User-Agent")
-            URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-                var result: [String: Any] = ["id": id, "ok": false, "items": []]
-                if error == nil, let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
-                   let data = data, data.count < 2_000_000 {
-                    let delegate = NewsRSSParser()
-                    let parser = XMLParser(data: data)
-                    parser.shouldResolveExternalEntities = false
-                    parser.delegate = delegate
-                    if parser.parse() {
-                        let formatter = DateFormatter()
-                        formatter.locale = Locale(identifier: "en_US_POSIX")
-                        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
-                        let now = Date()
-                        let trusted = ["nhk.or.jp", "nikkei.com", "asahi.com", "mainichi.jp", "yomiuri.co.jp", "kyodonews.jp", "47news.jp", "jiji.com", "reuters.com", "bbc.com", "bbc.co.uk", "cnn.co.jp", "impress.co.jp", "itmedia.co.jp", "oricon.co.jp", "natalie.mu", "nikkansports.com", "hochi.news", "sponichi.co.jp", "scienceportal.jst.go.jp", "jaxa.jp", "nature.com", "newsdig.tbs.co.jp", "fnn.jp", "news.ntv.co.jp", "tv-asahi.co.jp", "tv-tokyo.co.jp", "sankei.com", "chunichi.co.jp"]
-                        let items: [[String: Any]] = delegate.items.compactMap { entry in
-                            guard let title = entry["title"], let link = entry["link"],
-                                  let articleURL = URL(string: link), articleURL.scheme == "https",
-                                  let dateString = entry["pubDate"], let date = formatter.date(from: dateString),
-                                  now.timeIntervalSince(date) >= -300, now.timeIntervalSince(date) <= 86400,
-                                  let source = entry["source"], !source.isEmpty,
-                                  let sourceURL = entry["sourceURL"], let host = URL(string: sourceURL)?.host?.lowercased(),
-                                  !host.hasPrefix("ps."), !title.contains("【PR】"), !title.contains("[PR]"),
-                                  trusted.contains(where: { host == $0 || host.hasSuffix("." + $0) }) else { return nil }
-                            return ["title": title, "url": link, "source": source, "sourceURL": sourceURL,
-                                    "publishedAt": date.timeIntervalSince1970 * 1000, "id": entry["guid"] ?? link]
-                        }
-                        result["items"] = items.sorted { ($0["publishedAt"] as? Double ?? 0) > ($1["publishedAt"] as? Double ?? 0) }
-                        result["ok"] = true
-                        result["fetchedAt"] = now.timeIntervalSince1970 * 1000
-                    }
-                }
-                guard let bytes = try? JSONSerialization.data(withJSONObject: result), let json = String(data: bytes, encoding: .utf8) else { return }
-                DispatchQueue.main.async { self?.web?.evaluateJavaScript("window.radioNewsDidFinish(" + json + ")", completionHandler: nil) }
-            }.resume()
-        }
-
-        private func lookupDaily(_ payload: [String: Any]) {
-            guard let id = payload["id"] as? Int, let query = payload["query"] as? String else { return }
-            let offset = max(0, payload["offset"] as? Int ?? 0)
-            var c = URLComponents(string: "https://ja.wikipedia.org/w/api.php")!
-            c.queryItems = ["action":"query", "generator":"search", "gsrsearch":query,
-                "gsrlimit":"10", "gsroffset":String(offset), "gsrnamespace":"0",
-                "format":"json", "formatversion":"2"].map { URLQueryItem(name:$0.key, value:$0.value) }
-            guard let url = c.url else { return }
-            var request = URLRequest(url:url)
-            request.timeoutInterval = 15
-            request.setValue("MyRadio/0.4.5 (educational audio)", forHTTPHeaderField:"User-Agent")
-            URLSession.shared.dataTask(with:request) { [weak self] data, response, error in
-                guard let self = self else { return }
-                guard error == nil, let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
-                      let data = data, let obj = try? JSONSerialization.jsonObject(with:data) as? [String:Any],
-                      let q = obj["query"] as? [String:Any], let pages = q["pages"] as? [[String:Any]] else {
-                    self.sendDailyResult(["id":id, "pages":[], "ok":false]); return
-                }
-                let next = (obj["continue"] as? [String:Any])?["gsroffset"] as? Int ?? -1
-                // Full-page extracts must be fetched individually; intro-only extracts are often too short.
-                let group = DispatchGroup()
-                let lock = NSLock()
-                var expanded: [[String:Any]] = []
-                for page in pages {
-                    guard let pageID = page["pageid"] as? Int else { continue }
-                    var detail = URLComponents(string:"https://ja.wikipedia.org/w/api.php")!
-                    detail.queryItems = ["action":"query", "pageids":String(pageID), "prop":"extracts",
-                        "explaintext":"1", "exlimit":"1", "exchars":"1200", "exsectionformat":"plain",
-                        "format":"json", "formatversion":"2"].map { URLQueryItem(name:$0.key,value:$0.value) }
-                    guard let detailURL = detail.url else { continue }
-                    var detailRequest = URLRequest(url:detailURL)
-                    detailRequest.timeoutInterval = 15
-                    detailRequest.setValue("MyRadio/0.4.5 (educational audio)",forHTTPHeaderField:"User-Agent")
-                    group.enter()
-                    URLSession.shared.dataTask(with:detailRequest) { bytes, detailResponse, detailError in
-                        defer { group.leave() }
-                        guard detailError == nil, let http = detailResponse as? HTTPURLResponse, (200...299).contains(http.statusCode),
-                              let bytes = bytes, let root = try? JSONSerialization.jsonObject(with:bytes) as? [String:Any],
-                              let queryResult = root["query"] as? [String:Any], let values = queryResult["pages"] as? [[String:Any]],
-                              let value = values.first, let extract = value["extract"] as? String else { return }
-                        var completed = page
-                        completed["extract"] = extract
-                        lock.lock(); expanded.append(completed); lock.unlock()
-                    }.resume()
-                }
-                group.notify(queue:.main) {
-                    self.sendDailyResult(["id":id, "pages":expanded, "ok":!expanded.isEmpty, "next":next])
-                }
-            }.resume()
-        }
-
-        private func sendDailyResult(_ result: [String:Any]) {
-            guard let bytes = try? JSONSerialization.data(withJSONObject:result), let json = String(data:bytes,encoding:.utf8) else { return }
-            DispatchQueue.main.async { [weak self] in self?.web?.evaluateJavaScript("window.radioDailyDidFinish(" + json + ")",completionHandler:nil) }
-        }
-
-        private func lookupResponse(id: Int, title: String, text: String, url: String) {
-            let data: [String: Any] = ["id": id, "title": title, "text": text, "url": url]
-            guard let bytes = try? JSONSerialization.data(withJSONObject: data),
-                  let json = String(data: bytes, encoding: .utf8) else { return }
-            DispatchQueue.main.async { [weak self] in
-                self?.web?.evaluateJavaScript("window.radioLookupDidFinish(" + json + ")", completionHandler: nil)
-            }
-        }
-
-        private func speak(_ text: String, id: Int, payload: [String: Any]) {
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "radio", let payload = message.body as? [String: Any],
+              let type = payload["type"] as? String else { return }
+        switch type {
+        case "speak":
+            guard let text = payload["text"] as? String, let id = payload["id"] as? Int else { return }
+            speak(text, id: id, payload: payload)
+        case "cancel":
             currentID = nil
             speech.stopSpeaking(at: .immediate)
-            let line = AVSpeechUtterance(string: text)
-            let japanese = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("ja") }
-            let gender: AVSpeechSynthesisVoiceGender = (payload["gender"] as? String) == "m" ? .male : .female
-            let matching = japanese.filter { $0.gender == gender }
-            if let requestedID = payload["voiceID"] as? String,
-               let selected = AVSpeechSynthesisVoice(identifier: requestedID), selected.language.hasPrefix("ja") {
-                line.voice = selected
-            } else {
-                line.voice = matching.first ?? japanese.first ?? AVSpeechSynthesisVoice(language: "ja-JP")
-            }
-            let pitch = (payload["pitch"] as? Double) ?? 1
-            let speed = (payload["rate"] as? Double) ?? 1
-            line.pitchMultiplier = Float(min(2, max(0.5, pitch)))
-            line.rate = max(AVSpeechUtteranceMinimumSpeechRate, min(AVSpeechUtteranceMaximumSpeechRate, Float(0.5 * speed)))
-            do {
-                try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
-                try AVAudioSession.sharedInstance().setActive(true)
-            } catch { /* Keep speaking if session initialization is unavailable. */ }
-            currentID = id
-            speech.speak(line)
+        case "persist":
+            guard let key = payload["key"] as? String,
+                  ["myradio", "myradio_played", "myradio_req", "myradio_dv", "myradio_hist", "myradio_unique_v1"].contains(key),
+                  let value = payload["value"] as? String, value.count < 10000000 else { return }
+            UserDefaults.standard.set(value, forKey: "radio.saved." + key)
+        case "lookup": lookupEncyclopedia(payload)
+        case "dailyLookup": lookupDaily(payload)
+        case "newsLookup": lookupNews(payload)
+        case "schedule": scheduleAlarm(payload)
+        case "cancelAlarm":
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [notificationID])
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [notificationID])
+        default: break
         }
+    }
 
-        func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-            guard let id = currentID else { return }
-            currentID = nil
-            DispatchQueue.main.async { [weak self] in
-                self?.web?.evaluateJavaScript("window.radioSpeechDidFinish(" + String(id) + ")", completionHandler: nil)
-            }
-        }
-        func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {}
+    // Free encyclopedia lookup; no AI key or per-request AI charges.
+    // The retrieved content is attributed to Japanese Wikipedia in the UI.
+    private func lookupEncyclopedia(_ payload: [String: Any]) {
+        guard let id = payload["id"] as? Int,
+              let raw = payload["query"] as? String else { return }
+        let query = String(raw.trimmingCharacters(in: .whitespacesAndNewlines).prefix(100))
+        guard !query.isEmpty else { return }
 
-        private func scheduleAlarm(_ payload: [String: Any]) {
-            let time = payload["time"] as? String ?? "07:00"
-            let daily = payload["daily"] as? Bool ?? false
-            let seconds = max(1, (payload["delaySeconds"] as? Double) ?? 10)
-            let center = UNUserNotificationCenter.current()
-            center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
-                guard granted, let self = self else { return }
-                center.removePendingNotificationRequests(withIdentifiers: [self.notificationID])
-                let trigger: UNNotificationTrigger
-                if daily {
-                    let parts = time.split(separator: ":")
-                    guard parts.count == 2, let hh = Int(parts[0]), let mm = Int(parts[1]),
-                          (0...23).contains(hh), (0...59).contains(mm) else { return }
-                    var date = DateComponents(); date.hour = hh; date.minute = mm
-                    trigger = UNCalendarNotificationTrigger(dateMatching: date, repeats: true)
-                } else {
-                    trigger = UNTimeIntervalNotificationTrigger(timeInterval: seconds, repeats: false)
-                }
-                let content = UNMutableNotificationContent()
-                content.title = "MY RADIO"
-                content.body = "世界に1つ、あなただけの放送局。ラジオを始めましょう。"
-                content.sound = .default
-                center.add(UNNotificationRequest(identifier: self.notificationID, content: content, trigger: trigger))
+        var components = URLComponents(string: "https://ja.wikipedia.org/w/api.php")!
+        components.queryItems = [
+            URLQueryItem(name: "action", value: "query"),
+            URLQueryItem(name: "generator", value: "search"),
+            URLQueryItem(name: "gsrsearch", value: query),
+            URLQueryItem(name: "gsrlimit", value: "1"),
+            URLQueryItem(name: "gsrnamespace", value: "0"),
+            URLQueryItem(name: "prop", value: "extracts"),
+            URLQueryItem(name: "exsectionformat", value: "plain"),
+            URLQueryItem(name: "explaintext", value: "1"),
+            URLQueryItem(name: "exchars", value: "2600"),
+            URLQueryItem(name: "redirects", value: "1"),
+            URLQueryItem(name: "format", value: "json"),
+            URLQueryItem(name: "formatversion", value: "2")
+        ]
+        guard let url = components.url else { lookupResponse(id: id, title: "", text: "", url: ""); return }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 12
+        request.setValue("MY-RADIO-IOS/0.4.2 (https://github.com/shu39a-lang/MY-RADIO-IOS)", forHTTPHeaderField: "User-Agent")
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let self = self else { return }
+            guard error == nil,
+                  let http = response as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode),
+                  let data = data,
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let result = obj["query"] as? [String: Any],
+                  let pages = result["pages"] as? [[String: Any]],
+                  let page = pages.first,
+                  let title = page["title"] as? String,
+                  let extract = page["extract"] as? String else {
+                self.lookupResponse(id: id, title: "", text: "", url: "")
+                return
             }
-        }
+            let description = String(extract.trimmingCharacters(in: .whitespacesAndNewlines).prefix(2600))
+            guard !description.isEmpty else {
+                self.lookupResponse(id: id, title: "", text: "", url: "")
+                return
+            }
+            let wikiURL = "https://ja.wikipedia.org/wiki/" + (title.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? "")
+            self.lookupResponse(id: id, title: title, text: description, url: wikiURL)
+        }.resume()
+    }
 
-        func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
-                                    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-            // Foreground playback is controlled by the HTML timer.
-            completionHandler([])
+    private final class NewsRSSParser: NSObject, XMLParserDelegate {
+        var items: [[String: String]] = []
+        private var item: [String: String]? = nil
+        private var field = ""
+        func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String]) {
+            if name == "item" { item = [:] }
+            field = name
+            if name == "source", item != nil { item?["sourceURL"] = attributes["url"] ?? "" }
         }
-        func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
-                                    withCompletionHandler completionHandler: @escaping () -> Void) {
-            if response.notification.request.identifier == notificationID {
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self else { return }
-                    if self.web?.isLoading == true || self.web == nil {
-                        self.pendingLaunchFromNotification = true
-                    } else {
-                        self.web?.evaluateJavaScript("startRadio()", completionHandler: nil)
+        func parser(_ parser: XMLParser, foundCharacters string: String) {
+            guard item != nil, ["title", "link", "pubDate", "source", "guid"].contains(field) else { return }
+            item?[field, default: ""] += string
+        }
+        func parser(_ parser: XMLParser, foundCDATA data: Data) {
+            if let value = String(data: data, encoding: .utf8) { self.parser(parser, foundCharacters: value) }
+        }
+        func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
+            if name == "item", let value = item { items.append(value); item = nil }
+            field = ""
+        }
+    }
+
+    private func lookupNews(_ payload: [String: Any]) {
+        guard let id = payload["id"] as? Int, let rawQuery = payload["query"] as? String else { return }
+        let query = String(rawQuery.prefix(100))
+        var components = URLComponents(string: "https://news.google.com/rss/search")!
+        components.queryItems = [URLQueryItem(name: "q", value: query + " when:1d"),
+            URLQueryItem(name: "hl", value: "ja"), URLQueryItem(name: "gl", value: "JP"), URLQueryItem(name: "ceid", value: "JP:ja")]
+        guard let url = components.url else { return }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("MyRadio/0.4.5", forHTTPHeaderField: "User-Agent")
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            var result: [String: Any] = ["id": id, "ok": false, "items": []]
+            if error == nil, let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+               let data = data, data.count < 2_000_000 {
+                let delegate = NewsRSSParser()
+                let parser = XMLParser(data: data)
+                parser.shouldResolveExternalEntities = false
+                parser.delegate = delegate
+                if parser.parse() {
+                    let formatter = DateFormatter()
+                    formatter.locale = Locale(identifier: "en_US_POSIX")
+                    formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
+                    let now = Date()
+                    let trusted = ["nhk.or.jp", "nikkei.com", "asahi.com", "mainichi.jp", "yomiuri.co.jp", "kyodonews.jp", "47news.jp", "jiji.com", "reuters.com", "bbc.com", "bbc.co.uk", "cnn.co.jp", "impress.co.jp", "itmedia.co.jp", "oricon.co.jp", "natalie.mu", "nikkansports.com", "hochi.news", "sponichi.co.jp", "scienceportal.jst.go.jp", "jaxa.jp", "nature.com", "newsdig.tbs.co.jp", "fnn.jp", "news.ntv.co.jp", "tv-asahi.co.jp", "tv-tokyo.co.jp", "sankei.com", "chunichi.co.jp"]
+                    let items: [[String: Any]] = delegate.items.compactMap { entry in
+                        guard let title = entry["title"], let link = entry["link"],
+                              let articleURL = URL(string: link), articleURL.scheme == "https",
+                              let dateString = entry["pubDate"], let date = formatter.date(from: dateString),
+                              now.timeIntervalSince(date) >= -300, now.timeIntervalSince(date) <= 86400,
+                              let source = entry["source"], !source.isEmpty,
+                              let sourceURL = entry["sourceURL"], let host = URL(string: sourceURL)?.host?.lowercased(),
+                              !host.hasPrefix("ps."), !title.contains("【PR】"), !title.contains("[PR]"),
+                              trusted.contains(where: { host == $0 || host.hasSuffix("." + $0) }) else { return nil }
+                        return ["title": title, "url": link, "source": source, "sourceURL": sourceURL,
+                                "publishedAt": date.timeIntervalSince1970 * 1000, "id": entry["guid"] ?? link]
                     }
+                    result["items"] = items.sorted { ($0["publishedAt"] as? Double ?? 0) > ($1["publishedAt"] as? Double ?? 0) }
+                    result["ok"] = true
+                    result["fetchedAt"] = now.timeIntervalSince1970 * 1000
                 }
             }
-            completionHandler()
-        }
-        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            showLoadError(in: webView)
-        }
-        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            showLoadError(in: webView)
-        }
-        private func showLoadError(in webView: WKWebView) {
-            webView.loadHTMLString(EmbeddedRadioPage.html, baseURL: nil)
-        }
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            let voices = AVSpeechSynthesisVoice.speechVoices()
-                .filter { $0.language.hasPrefix("ja") }
-                .map { ["name": $0.name, "voiceURI": $0.identifier, "gender": $0.gender.rawValue == 1 ? "male" : "other"] }
-            if let bytes = try? JSONSerialization.data(withJSONObject: voices),
-               let literal = String(data: bytes, encoding: .utf8) {
-                webView.evaluateJavaScript("window.radioNativeVoices(" + literal + ")", completionHandler: nil)
+            guard let bytes = try? JSONSerialization.data(withJSONObject: result), let json = String(data: bytes, encoding: .utf8) else { return }
+            DispatchQueue.main.async { self?.web?.evaluateJavaScript("window.radioNewsDidFinish(" + json + ")", completionHandler: nil) }
+        }.resume()
+    }
+
+    private func lookupDaily(_ payload: [String: Any]) {
+        guard let id = payload["id"] as? Int, let query = payload["query"] as? String else { return }
+        let offset = max(0, payload["offset"] as? Int ?? 0)
+        var c = URLComponents(string: "https://ja.wikipedia.org/w/api.php")!
+        c.queryItems = ["action":"query", "generator":"search", "gsrsearch":query,
+            "gsrlimit":"10", "gsroffset":String(offset), "gsrnamespace":"0",
+            "format":"json", "formatversion":"2"].map { URLQueryItem(name:$0.key, value:$0.value) }
+        guard let url = c.url else { return }
+        var request = URLRequest(url:url)
+        request.timeoutInterval = 15
+        request.setValue("MyRadio/0.4.5 (educational audio)", forHTTPHeaderField:"User-Agent")
+        URLSession.shared.dataTask(with:request) { [weak self] data, response, error in
+            guard let self = self else { return }
+            guard error == nil, let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                  let data = data, let obj = try? JSONSerialization.jsonObject(with:data) as? [String:Any],
+                  let q = obj["query"] as? [String:Any], let pages = q["pages"] as? [[String:Any]] else {
+                self.sendDailyResult(["id":id, "pages":[], "ok":false]); return
             }
-            if pendingLaunchFromNotification {
-                pendingLaunchFromNotification = false
-                webView.evaluateJavaScript("startRadio()", completionHandler: nil)
+            let next = (obj["continue"] as? [String:Any])?["gsroffset"] as? Int ?? -1
+            // Full-page extracts must be fetched individually; intro-only extracts are often too short.
+            let group = DispatchGroup()
+            let lock = NSLock()
+            var expanded: [[String:Any]] = []
+            for page in pages {
+                guard let pageID = page["pageid"] as? Int else { continue }
+                var detail = URLComponents(string:"https://ja.wikipedia.org/w/api.php")!
+                detail.queryItems = ["action":"query", "pageids":String(pageID), "prop":"extracts",
+                    "explaintext":"1", "exlimit":"1", "exchars":"1200", "exsectionformat":"plain",
+                    "format":"json", "formatversion":"2"].map { URLQueryItem(name:$0.key,value:$0.value) }
+                guard let detailURL = detail.url else { continue }
+                var detailRequest = URLRequest(url:detailURL)
+                detailRequest.timeoutInterval = 15
+                detailRequest.setValue("MyRadio/0.4.5 (educational audio)",forHTTPHeaderField:"User-Agent")
+                group.enter()
+                URLSession.shared.dataTask(with:detailRequest) { bytes, detailResponse, detailError in
+                    defer { group.leave() }
+                    guard detailError == nil, let http = detailResponse as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                          let bytes = bytes, let root = try? JSONSerialization.jsonObject(with:bytes) as? [String:Any],
+                          let queryResult = root["query"] as? [String:Any], let values = queryResult["pages"] as? [[String:Any]],
+                          let value = values.first, let extract = value["extract"] as? String else { return }
+                    var completed = page
+                    completed["extract"] = extract
+                    lock.lock(); expanded.append(completed); lock.unlock()
+                }.resume()
             }
+            group.notify(queue:.main) {
+                self.sendDailyResult(["id":id, "pages":expanded, "ok":!expanded.isEmpty, "next":next])
+            }
+        }.resume()
+    }
+
+    private func sendDailyResult(_ result: [String:Any]) {
+        guard let bytes = try? JSONSerialization.data(withJSONObject:result), let json = String(data:bytes,encoding:.utf8) else { return }
+        DispatchQueue.main.async { [weak self] in self?.web?.evaluateJavaScript("window.radioDailyDidFinish(" + json + ")",completionHandler:nil) }
+    }
+
+    private func lookupResponse(id: Int, title: String, text: String, url: String) {
+        let data: [String: Any] = ["id": id, "title": title, "text": text, "url": url]
+        guard let bytes = try? JSONSerialization.data(withJSONObject: data),
+              let json = String(data: bytes, encoding: .utf8) else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.web?.evaluateJavaScript("window.radioLookupDidFinish(" + json + ")", completionHandler: nil)
+        }
+    }
+
+    private func speak(_ text: String, id: Int, payload: [String: Any]) {
+        currentID = nil
+        speech.stopSpeaking(at: .immediate)
+        let line = AVSpeechUtterance(string: text)
+        let japanese = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("ja") }
+        let gender: AVSpeechSynthesisVoiceGender = (payload["gender"] as? String) == "m" ? .male : .female
+        let matching = japanese.filter { $0.gender == gender }
+        if let requestedID = payload["voiceID"] as? String,
+           let selected = AVSpeechSynthesisVoice(identifier: requestedID), selected.language.hasPrefix("ja") {
+            line.voice = selected
+        } else {
+            line.voice = matching.first ?? japanese.first ?? AVSpeechSynthesisVoice(language: "ja-JP")
+        }
+        let pitch = (payload["pitch"] as? Double) ?? 1
+        let speed = (payload["rate"] as? Double) ?? 1
+        line.pitchMultiplier = Float(min(2, max(0.5, pitch)))
+        line.rate = max(AVSpeechUtteranceMinimumSpeechRate, min(AVSpeechUtteranceMaximumSpeechRate, Float(0.5 * speed)))
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch { /* Keep speaking if session initialization is unavailable. */ }
+        currentID = id
+        speech.speak(line)
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        guard let id = currentID else { return }
+        currentID = nil
+        DispatchQueue.main.async { [weak self] in
+            self?.web?.evaluateJavaScript("window.radioSpeechDidFinish(" + String(id) + ")", completionHandler: nil)
+        }
+    }
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {}
+
+    private func scheduleAlarm(_ payload: [String: Any]) {
+        let time = payload["time"] as? String ?? "07:00"
+        let daily = payload["daily"] as? Bool ?? false
+        let seconds = max(1, (payload["delaySeconds"] as? Double) ?? 10)
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
+            guard granted, let self = self else { return }
+            center.removePendingNotificationRequests(withIdentifiers: [self.notificationID])
+            let trigger: UNNotificationTrigger
+            if daily {
+                let parts = time.split(separator: ":")
+                guard parts.count == 2, let hh = Int(parts[0]), let mm = Int(parts[1]),
+                      (0...23).contains(hh), (0...59).contains(mm) else { return }
+                var date = DateComponents(); date.hour = hh; date.minute = mm
+                trigger = UNCalendarNotificationTrigger(dateMatching: date, repeats: true)
+            } else {
+                trigger = UNTimeIntervalNotificationTrigger(timeInterval: seconds, repeats: false)
+            }
+            let content = UNMutableNotificationContent()
+            content.title = "MY RADIO"
+            content.body = "世界に1つ、あなただけの放送局。ラジオを始めましょう。"
+            content.sound = .default
+            center.add(UNNotificationRequest(identifier: self.notificationID, content: content, trigger: trigger))
+        }
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        // Foreground playback is controlled by the HTML timer.
+        completionHandler([])
+    }
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        if response.notification.request.identifier == notificationID {
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                if self.web?.isLoading == true || self.web == nil {
+                    self.pendingLaunchFromNotification = true
+                } else {
+                    self.web?.evaluateJavaScript("startRadio()", completionHandler: nil)
+                }
+            }
+        }
+        completionHandler()
+    }
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        showLoadError(in: webView)
+    }
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        showLoadError(in: webView)
+    }
+    private func showLoadError(in webView: WKWebView) {
+        webView.loadHTMLString(EmbeddedRadioPage.html, baseURL: nil)
+    }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        let voices = AVSpeechSynthesisVoice.speechVoices()
+            .filter { $0.language.hasPrefix("ja") }
+            .map { ["name": $0.name, "voiceURI": $0.identifier, "gender": $0.gender.rawValue == 1 ? "male" : "other"] }
+        if let bytes = try? JSONSerialization.data(withJSONObject: voices),
+           let literal = String(data: bytes, encoding: .utf8) {
+            webView.evaluateJavaScript("window.radioNativeVoices(" + literal + ")", completionHandler: nil)
+        }
+        if pendingLaunchFromNotification {
+            pendingLaunchFromNotification = false
+            webView.evaluateJavaScript("startRadio()", completionHandler: nil)
         }
     }
 }
 
+}
+
 private enum EmbeddedRadioPage {
-    static let html = ##"""
+static let html = ##"""
+
 <!doctype html>
+
 <html lang="ja" data-theme="dark">
 <head>
 <meta charset="utf-8">
@@ -420,37 +423,36 @@ input[type=time]{font:inherit;padding:8px 10px;border-radius:10px;border:1px sol
 .ptitle{font-size:18px;font-weight:700;margin:0 0 4px}
 .chk{display:flex;gap:8px;align-items:center;font-size:14px;margin-top:10px}
 
-/* レトロ4番：元の機能・番組データを変更しない表示レイヤー */
-/* 4つの見本で共通。元の番組・話題選択・音声・アラームは維持。 */
-:root { font-synthesis: none; }
+/* レトロ4番：元の機能・番組データを変更しない表示レイヤー /
+/ 4つの見本で共通。元の番組・話題選択・音声・アラームは維持。 */
+ { font-synthesis: none; }
 html { scroll-behavior: smooth; }
 body { min-height: 100svh; }
 main { max-width: 480px; padding: 18px 17px 56px; }
 .hero { display: flex; align-items: center; gap: 16px; margin: 2px 0 19px; position: relative; overflow: hidden; }
-.hero > * { position:relative; z-index:1; }
+.hero > * { position; z-index:1; }
 .brand-mark {flex: 0 0 auto; width: 66px; height: 66px; display: flex; align-items: center; justify-content: center;}
 .hero h1 { margin: 0; line-height: 1.1; font-size: 33px; font-weight: 830; letter-spacing: .06em; white-space: nowrap; }
 .hero .sub { line-height: 1.4; font-size: 13.3px; font-weight: 620; margin: 10px 0 0; letter-spacing: .008em; }
 .card { border-radius:20px; padding:18px; margin-bottom:14px; }
 h2 { letter-spacing:.02em; font-size: 14px; margin-bottom: 13px; }
 .chip { transition: background-color .15s,transform .15s; padding: 9px 13px; font-size: 14px; }
-.chip:active, .btn:active,.big:active{ transform:scale(.985); }
+.chip, .btn,.big{ transform(.985); }
 input, select, button { -webkit-tap-highlight-color: transparent; }
 .btn,.big { transition: filter .15s ease,transform .15s ease; }
 .big {box-shadow:0 6px 18px rgba(0,0,0,.09);}
-button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--acc);outline-offset:2px;}
+button,input,select{outline:3px solid var(--acc);outline-offset:2px;}
 @media(max-width:380px){.hero h1{font-size:29px}.hero .sub{font-size:12px}.hero{gap:12px}.brand-mark{width:56px;height:56px}.card{padding:15px}}
 
- :root[data-theme="dark"]{--bg:#211c1b;--card:#302723;--ink:#f7eddc;--mute:#c1aa93;--acc:#e0aa6b;--onacc:#251b17;--soft:#49392f;--line:#55453c;}
- body{background:linear-gradient(135deg,#241e1b,#211c1b 65%,#2b201d)}
- .hero{padding:30px 19px;border-radius:15px;background:repeating-linear-gradient(0deg,transparent,transparent 6px,#ffffff07 7px),linear-gradient(135deg,#5d3c2c,#352823);border:3px double #b98d5f;box-shadow:0 12px 32px #00000055;}
- .hero::before{content:"";position:absolute;top:13px;bottom:13px;left:12px;right:12px;border:1px solid #d8ac6e5e;border-radius:7px;pointer-events:none;}
- .brand-mark{background:linear-gradient(145deg,#d8b187,#8e6947);color:#38271e;border-radius:50%;border:3px double #f0d1a0;box-shadow:0 0 0 6px #e0ba8c25;}
- .hero h1{font-family:Georgia,"Times New Roman",serif;letter-spacing:.07em;color:#ffe0aa;font-weight:700;font-size:31px;}
- .hero .sub{color:#f0cba3;font-size:12px;}
- h2{color:#e0b994}.card{border-radius:12px;box-shadow:0 6px 22px #00000025;}
- .chip{border-radius:7px}.voices .chip{border-radius:7px}.big{border-radius:10px}.btn{border-radius:8px}
- 
+{--bg:#211c1b;--card:#302723;--ink:#f7eddc;--mute:#c1aa93;--acc:#e0aa6b;--onacc:#251b17;--soft:#49392f;--line:#55453c;}
+body{background(135deg,#241e1b,#211c1b 65%,#2b201d)}
+.hero{padding:30px 19px;border-radius:15px;background(0deg,transparent,transparent 6px,#ffffff07 7px),linear-gradient(135deg,#5d3c2c,#352823);border:3px double #b98d5f;box-shadow:0 12px 32px #00000055;}
+.hero::before{content:"";position;top:13px;bottom:13px;left:12px;right:12px;border:1px solid #d8ac6e5e;border-radius:7px;pointer-events;}
+.brand-mark{background(145deg,#d8b187,#8e6947);color:#38271e;border-radius:50%;border:3px double #f0d1a0;box-shadow:0 0 0 6px #e0ba8c25;}
+.hero h1{font-family,"Times New Roman",serif;letter-spacing:.07em;color:#ffe0aa;font-weight:700;font-size:31px;}
+.hero .sub{color:#f0cba3;font-size:12px;}
+h2{color:#e0b994}.card{border-radius:12px;box-shadow:0 6px 22px #00000025;}
+.chip{border-radius:7px}.voices .chip{border-radius:7px}.big{border-radius:10px}.btn{border-radius:8px}
 
 </style>
 </head>
@@ -502,7 +504,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
     <label class="chk"><input type="checkbox" id="progAlarm"> モーニングコールの後にこの番組を流す</label>
   </div>
 
-  <button class="big" id="play">▶ ラジオを始める</button>
+<button class="big" id="play">▶ ラジオを始める</button>
 
   <div class="card" style="margin-top:14px">
     <h2>放送中のことば</h2>
@@ -553,6 +555,7 @@ function renderVoices(){$("voices").innerHTML="";STYLES.forEach(s=>{const b=docu
 function style(){return STYLES.find(s=>s.id===styleId)}
 function pickVoice(){const vs=(speechSynthesis.getVoices()||[]).filter(v=>/^ja/i.test(v.lang));const g=style().g;return vs.find(v=>(g==="f"?FEM:MAL).test(v.name))||vs.find(v=>!(g==="f"?MAL:FEM).test(v.name))||vs[0]||null}
 function utter(text,done){
+ text=spokenText(text);if(!text){queueMicrotask(done);return;}
  if(hasNative()){
   const s=style();const id=++nativeID;
   nativeDone.set(id,done);
@@ -731,22 +734,13 @@ function parseEp(t){const ls=t.trim().split(/\n+/);let title="";if(/^題[::]/.te
 async function genEpisode(it){const h=(hist()[it.key]||[]).slice(-30);const d=new Date();const p="あなたは日本語のラジオパーソナリティです。次のテーマで、ラジオで読み上げるお話を書いてください。\nテーマ: "+it.q+"\n長さ: 約1000文字(3〜4分)\n条件:\n・1つの具体的な事柄を選び、背景や理由まで深く掘り下げる\n・聞き手に語りかける、です・ます調の話し言葉\n・箇条書き、記号、絵文字、括弧書きは使わない\n・確かな事実だけを書き、自信のない数字や年号は断定しない\n・今日は"+(d.getMonth()+1)+"月"+d.getDate()+"日(1年の"+dayNo()+"日目)。季節や日付にちなんだ切り口を選んでもよい\n・次の題で話した内容は避ける: "+(h.join("、")||"なし")+"\n・危険な行為の方法や、医療・投資の断定的な助言は避ける\n出力形式: 1行目は「題:」に続けて15文字以内の題名。2行目以降は本文のみ。";const r=await SAMPLE(p,{modelTier:"quick",cache:false});const e=parseEp(r.text);if(!e.sents.length)throw 0;if(e.title)addHist(it.key,e.title);return e}
 async function runAI(items){stopRadio();playing=true;pend=0;genDone=false;$("play").textContent="■ 停止";$("log").innerHTML="";lockScreen();say(greeting());for(const it of items){if(!playing)return;say(it.req?"リクエストをいただいた、"+it.name+"について、お話しします。":"続いて、"+it.name+"の話題です。");const g=document.createElement("p");g.className="note";g.textContent="お話を作っています…";$("log").appendChild(g);let e=null;try{e=await genEpisode(it)}catch(x){}g.remove();if(!playing)return;if(e){if(e.title)say("今日のお話は、"+e.title+"です。");e.sents.forEach(say)}else if(TOPICS[it.key]){pickEps(it.key).forEach(say)}else say("うまくお話を作れませんでした。時間をおいて、もう一度お試しください。")}say("以上、マイラジオでした。今日も良い一日を。");genDone=true}
 const _start=startRadio;startRadio=function(){if(SAMPLE&&$("aiMode")?.checked&&sel.size){runAI([...sel].map(k=>({name:TOPICS[k].n,key:k,q:TOPICS[k].n})))}else _start()};
-function renderReq(){let r=[];try{r=JSON.parse((window.__myradioSaved?.myradio_req ?? localStorage.getItem("myradio_req"))||"[]")}catch(e){}const b=$("reqhist");b.innerHTML="";r.forEach(t=>{const c=document.createElement("button");c.className="chip";c.textContent=t;c.onclick=()=>{$("req").value=t};b.appendChild(c)})}
+function renderReq(){$('reqhist').textContent='';reqStatus('')}
 // One visible response for every tap; built-in stories work without internet.
 // When the iPhone has internet, read the introduction of a related Wikipedia article.
 let requestSerial=0;
-function reqStatus(text){$("reqstatus").textContent=text}
-function reqSource(title,url){
-  const box=$("reqsource");box.textContent="";
-  if(!url)return;
-  const a=document.createElement("a");a.href=url;a.target="_blank";a.rel="noopener noreferrer";
-  a.textContent="出典：日本語版Wikipedia「"+title+"」";
-  a.style.color="var(--acc)";box.appendChild(a);
-  box.appendChild(document.createTextNode(" ・ "));
-  const lic=document.createElement("a");lic.href="https://creativecommons.org/licenses/by-sa/4.0/deed.ja";
-  lic.target="_blank";lic.rel="noopener noreferrer";lic.textContent="CC BY-SA 4.0（抜粋・読み上げ用に整形）";
-  lic.style.color="var(--acc)";box.appendChild(lic);
-}
+function reqStatus(text){$("reqstatus").textContent=$("req").value.trim()}
+$('req').addEventListener('input',()=>reqStatus(''));
+function reqSource(title,url){$('reqsource').textContent=''}
 function requestLines(lines,status){
   stopRadio();
   playing=true;
@@ -873,7 +867,12 @@ async function fetchDaily(query,offset){
  if(!hasNative())throw Error('日替わり放送はiPhoneアプリでご利用ください。');
  return new Promise((resolve,reject)=>{const id=++dailySerial;const timer=setTimeout(()=>{dailyPending.delete(id);reject(Error('背景解説の取得がタイムアウトしました。'))},45000);dailyPending.set(id,{resolve,reject,timer});sendNative({type:'dailyLookup',id,query,offset})});
 }
-function cleanArticle(text){return text.replace(/\n[^\n]{1,45}\n/g,'\n').replace(/\[[0-9]+\]/g,'').replace(/\s+/g,' ').trim()}
+function spokenText(text){
+ const pairs={'（':'）','(':')','「':'」','『':'』'};const stack=[];let out='';
+ for(const c of String(text)){if(pairs[c]){stack.push(pairs[c]);continue}if(stack.length){if(c===stack[stack.length-1])stack.pop();continue}out+=c}
+ return out.replace(/\s+/g,' ').trim();
+}
+function cleanArticle(text){return spokenText(text).replace(/\n[^\n]{1,45}\n/g,'\n').replace(/\[[0-9]+\]/g,'').replace(/\s+/g,' ').trim()}
 function segment(text,min=850){
  const lines=splitForSpeech(text);let body='';
  for(const line of lines){if(body.length+line.length>1150)break;body+=line;if(body.length>=min)break}
@@ -972,14 +971,15 @@ async function playFresh(specs,feature=false){
   const stamp=document.createElement('p');stamp.className='note';stamp.textContent='ニュース取得：'+newsTime(fetchedAt)+'（日本時間）／公開24時間以内';$('log').appendChild(stamp);
   const lines=[];
   for(const a of articles){
-   for(const n of a.news){lines.push({news:n,text:'最新ニュースの見出しをご紹介します。'+n.source+'が、日本時間'+newsTime(n.publishedAt)+'に公開した記事です。「'+headline(n)+'」。詳しい内容は、画面の元の記事からご覧いただけます。'})}
+   for(const n of a.news){lines.push({news:n,text:'最新ニュースの見出しをご紹介します。'+n.source+'が、日本時間'+newsTime(n.publishedAt)+'に公開した記事です。'+spokenText(headline(n))+'。詳しい内容は、画面の元の記事からご覧いただけます。'})}
    lines.push({article:a,text:'ここからは最新ニュースとは別に、同じ分野の背景知識をお届けします。テーマは、'+a.title+'です。'});
-   for(const text of splitForSpeech(a.text))lines.push({text});
+   for(const text of splitForSpeech(spokenText(a.text)))lines.push({text});
   }
+  lines.push({text:'今日はここまでです。お聴きいただき、ありがとうございました。またお会いしましょう。マイラジオでした。'});
   let index=0;
   const next=()=>{
    if(token!==dailyRun||!playing)return;
-   if(index===lines.length){stopRadio();reqStatus('放送が終了しました。');return}
+   if(index===lines.length){stopRadio();const end=document.createElement('p');end.className='note';end.textContent='放送終了';$('log').appendChild(end);return}
    const line=lines[index++];
    if(line.news){
     const n=line.news;if(!freshNews(n)||!unseenNews(n)){next();return}
@@ -993,7 +993,7 @@ async function playFresh(specs,feature=false){
     for(const key of articleKeys(a))uniqueState.seen[key]=localDay();
     try{saveUnique()}catch(e){stopRadio();$('log').textContent='放送履歴を保存できないため再生を停止しました。';return}
     reqSource(a.title,a.url);
-    const source=document.createElement('p');const link=document.createElement('a');link.href=a.url;link.target='_blank';link.textContent='背景解説の出典：Wikipedia「'+a.title+'」';source.appendChild(link);$('log').appendChild(source);
+    const source=document.createElement('p');const link=document.createElement('a');link.href=a.url;link.target='_blank';link.textContent='背景解説の出典：Wikipedia「'+a.title+'」';source.appendChild(link);const license=document.createElement('a');license.href='https://creativecommons.org/licenses/by-sa/4.0/deed.ja';license.target='_blank';license.textContent=' ／ CC BY-SA 4.0（抜粋・読み上げ用に整形）';source.appendChild(license);$('log').appendChild(source);
    }
    const p=document.createElement('p');p.textContent=line.text;$('log').appendChild(p);$('log').scrollTop=1e6;utter(line.text,next);
   };next();
@@ -1010,6 +1010,7 @@ renderReq();
 renderChs();
 renderTopics();renderVoices();
 </script>
+
 </body>
 </html>
 
