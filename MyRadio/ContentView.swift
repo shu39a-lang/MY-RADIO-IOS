@@ -2,6 +2,24 @@ import SwiftUI
 import WebKit
 import AVFoundation
 import UserNotifications
+import AlarmKit
+import AppIntents
+
+@available(iOS 26.0, *)
+private struct RadioAlarmMetadata: AlarmMetadata {}
+
+@available(iOS 26.0, *)
+struct ListenToRadioIntent: LiveActivityIntent {
+static var title: LocalizedStringResource = "放送開始"
+static var openAppWhenRun: Bool = true
+func perform() async throws -> some IntentResult {
+UserDefaults.standard.set(true, forKey: "radio.alarm.launch")
+await MainActor.run {
+NotificationCenter.default.post(name: Notification.Name("RadioAlarmLaunch"), object: nil)
+}
+return .result()
+}
+}
 
 struct ContentView: View {
 var body: some View {
@@ -43,7 +61,7 @@ func makeUIView(context: Context) -> WKWebView {
     do {
         let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let url = folder.appendingPathComponent("myradio-screen-v045.html")
+        let url = folder.appendingPathComponent("myradio-screen-v047.html")
         try EmbeddedRadioPage.html.write(to: url, atomically: true, encoding: .utf8)
         web.loadFileURL(url, allowingReadAccessTo: folder)
     } catch {
@@ -62,7 +80,35 @@ final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
     private var pendingLaunchFromNotification = false
     private let notificationID = "jp.myradio.personal.morning"
 
-    override init() { super.init(); speech.delegate = self }
+    private let alarmID = UUID(uuidString: "68AB4C19-D435-442F-B062-B9E0B944723C")!
+    private var alarmTask: Task<Void, Never>?
+    override init() {
+        super.init(); speech.delegate = self
+        NotificationCenter.default.addObserver(self, selector: #selector(launchAlarmRadio), name: Notification.Name("RadioAlarmLaunch"), object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(launchAlarmRadio), name: UIApplication.didBecomeActiveNotification, object: nil)
+    }
+    deinit { NotificationCenter.default.removeObserver(self) }
+    @objc private func launchAlarmRadio() {
+        guard UserDefaults.standard.bool(forKey: "radio.alarm.launch"),
+              let web = web, !web.isLoading else { return }
+        web.evaluateJavaScript("typeof startRadio === 'function'") { [weak self] ready, _ in
+            guard let self = self, ready as? Bool == true,
+                  UserDefaults.standard.bool(forKey: "radio.alarm.launch") else { return }
+            UserDefaults.standard.set(false, forKey: "radio.alarm.launch")
+            if #available(iOS 26.0, *) { try? AlarmManager.shared.stop(id: self.alarmID) }
+            let feature = UserDefaults.standard.bool(forKey: "radio.alarm.feature")
+            self.web?.evaluateJavaScript(feature ? "startProgram()" : "startRadio()", completionHandler: nil)
+        }
+    }
+    private func alarmStatus(_ text: String) {
+        UserDefaults.standard.set(text, forKey: "radio.alarm.status")
+        guard let data = try? JSONSerialization.data(withJSONObject: [text]),
+              let value = String(data: data, encoding: .utf8) else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.web?.evaluateJavaScript("window.radioAlarmStatus(" + value + "[0])", completionHandler: nil)
+        }
+    }
+
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == "radio", let payload = message.body as? [String: Any],
@@ -84,6 +130,9 @@ final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
         case "newsLookup": lookupNews(payload)
         case "schedule": scheduleAlarm(payload)
         case "cancelAlarm":
+            alarmTask?.cancel()
+            if #available(iOS 26.0, *) { try? AlarmManager.shared.cancel(id: alarmID) }
+            alarmStatus("未設定")
             UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [notificationID])
             UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [notificationID])
         default: break
@@ -310,12 +359,61 @@ final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {}
 
     private func scheduleAlarm(_ payload: [String: Any]) {
+        UserDefaults.standard.set(payload["feature"] as? Bool ?? false, forKey: "radio.alarm.feature")
+        if #available(iOS 26.0, *) {
+            scheduleSystemAlarm(payload)
+            return
+        }
+        scheduleNotificationAlarm(payload)
+    }
+    @available(iOS 26.0, *)
+    private func scheduleSystemAlarm(_ payload: [String: Any]) {
+        alarmTask?.cancel()
+        let time = payload["time"] as? String ?? "07:00"
+        let daily = payload["daily"] as? Bool ?? false
+        let seconds = max(1, payload["delaySeconds"] as? Double ?? 10)
+        alarmStatus("アラームを設定しています…")
+        alarmTask = Task { @MainActor [weak self] in
+            guard let self = self else { return }
+            do {
+                let manager = AlarmManager.shared
+                let authorization = try await manager.requestAuthorization()
+                guard !Task.isCancelled else { return }
+                guard authorization == .authorized else {
+                    self.alarmStatus("アラームが許可されていません。iPhoneの設定で許可してください。")
+                    return
+                }
+                let schedule: Alarm.Schedule
+                if daily {
+                    let parts = time.split(separator: ":").compactMap { Int($0) }
+                    guard parts.count == 2, (0...23).contains(parts[0]), (0...59).contains(parts[1]) else {
+                        self.alarmStatus("時刻を選び直してください。")
+                        return
+                    }
+                    schedule = .relative(.init(time: .init(hour: parts[0], minute: parts[1]), repeats: .weekly([.monday, .tuesday, .wednesday, .thursday, .friday, .saturday, .sunday])))
+                } else { schedule = .fixed(Date().addingTimeInterval(seconds)) }
+                let presentation = AlarmPresentation(alert: .init(title: "マイラジオの時間です", stopButton: AlarmButton(text: "停止", textColor: .white, systemImageName: "stop.fill"), secondaryButton: AlarmButton(text: "放送開始", textColor: .white, systemImageName: "radio"), secondaryButtonBehavior: .custom))
+                let attributes = AlarmAttributes(presentation: presentation, metadata: RadioAlarmMetadata(), tintColor: Color.orange)
+                let configuration = AlarmManager.AlarmConfiguration.alarm(schedule: schedule, attributes: attributes, secondaryIntent: ListenToRadioIntent())
+                try? manager.cancel(id: self.alarmID)
+                _ = try await manager.schedule(id: self.alarmID, configuration: configuration)
+                if Task.isCancelled { try? manager.cancel(id: self.alarmID); return }
+                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [self.notificationID])
+                self.alarmStatus(daily ? "毎日 " + time + " にアラーム設定済み" : "10秒後のテストアラームを設定しました")
+            } catch {
+                guard !Task.isCancelled else { return }
+                self.alarmStatus("アラームを設定できませんでした。設定の許可を確認して再度お試しください。")
+            }
+        }
+    }
+    private func scheduleNotificationAlarm(_ payload: [String: Any]) {
         let time = payload["time"] as? String ?? "07:00"
         let daily = payload["daily"] as? Bool ?? false
         let seconds = max(1, (payload["delaySeconds"] as? Double) ?? 10)
         let center = UNUserNotificationCenter.current()
         center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
-            guard granted, let self = self else { return }
+            guard let self = self else { return }
+            guard granted else { self.alarmStatus("通知が許可されていません。iPhoneの設定で許可してください。"); return }
             center.removePendingNotificationRequests(withIdentifiers: [self.notificationID])
             let trigger: UNNotificationTrigger
             if daily {
@@ -331,7 +429,9 @@ final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
             content.title = "MY RADIO"
             content.body = "世界に1つ、あなただけの放送局。ラジオを始めましょう。"
             content.sound = .default
-            center.add(UNNotificationRequest(identifier: self.notificationID, content: content, trigger: trigger))
+            center.add(UNNotificationRequest(identifier: self.notificationID, content: content, trigger: trigger)) { error in
+                self.alarmStatus(error == nil ? "通知を設定しました。標準アラームにはiOS 26以降が必要です。" : "通知を設定できませんでした。")
+            }
         }
     }
 
@@ -364,6 +464,8 @@ final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate,
         webView.loadHTMLString(EmbeddedRadioPage.html, baseURL: nil)
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        alarmStatus(UserDefaults.standard.string(forKey: "radio.alarm.status") ?? "未設定")
+        launchAlarmRadio()
         let voices = AVSpeechSynthesisVoice.speechVoices()
             .filter { $0.language.hasPrefix("ja") }
             .map { ["name": $0.name, "voiceURI": $0.identifier, "gender": $0.gender.rawValue == 1 ? "male" : "other"] }
@@ -454,12 +556,22 @@ body{background(135deg,#241e1b,#211c1b 65%,#2b201d)}
 h2{color:#e0b994}.card{border-radius:12px;box-shadow:0 6px 22px #00000025;}
 .chip{border-radius:7px}.voices .chip{border-radius:7px}.big{border-radius:10px}.btn{border-radius:8px}
 
+
+
+.hero{display;grid-template-columns:76px minmax(0,1fr);gap:12px;padding:22px 14px;overflow}
+.brand-copy{display}
+.brand-mark{width:76px;height:64px;border:0;border-radius:0;background;box-shadow}
+.brand-mark svg{display;width:76px;height:64px;flex;opacity:1;visibility}
+.hero h1{font-size(24px,7.5vw,34px);letter-spacing:.02em}
+.hero .sub{grid-column:1 / -1;white-space;text-align;font-size(13px,4.2vw,18px);line-height:1.4;margin:4px 0 0;letter-spacing:0}
+#reqstatus{font-size:20px;font-weight:700;line-height:1.5;color(--ink);overflow-wrap}
 </style>
+
 </head>
 <body>
 <main>
 <header class="hero" aria-label="MY RADIO">
-      <div class="brand-mark"><svg width="34" height="34" viewBox="0 0 48 48" role="img" aria-label="ラジオ" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="9" y="18" width="30" height="22" rx="6" stroke="currentColor" stroke-width="2.8"/><circle cx="19" cy="29" r="5" stroke="currentColor" stroke-width="2.5"/><path d="M29 26h4M29 32h4M12 18l21-8" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/><path d="M35 5c3 1.5 5 3.5 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div>
+      <div class="brand-mark"><svg viewBox="0 0 90 76" role="img" aria-label="古い木製ラジオ" xmlns="http://www.w3.org/2000/svg"><path d="M16 17L63 3" stroke="#ffdfa4" stroke-width="3" stroke-linecap="round"/><rect x="3" y="18" width="84" height="52" rx="9" fill="#996037" stroke="#ffdfa4" stroke-width="3"/><rect x="11" y="27" width="35" height="33" rx="5" fill="#35251b" stroke="#d8ad70" stroke-width="2"/><path d="M16 30v27m6-27v27m6-27v27m6-27v27m6-27v27" stroke="#c7985c" stroke-width="2"/><rect x="53" y="27" width="26" height="11" rx="2" fill="#ffe7ac"/><path d="M57 30v5m5-5v5m5-5v5m5-5v5" stroke="#5c3924"/><circle cx="59" cy="52" r="7" fill="#eec786" stroke="#38271e" stroke-width="2"/><circle cx="76" cy="52" r="5" fill="#eec786" stroke="#38271e" stroke-width="2"/><path d="M15 71v3m59-3v3" stroke="#ffdfa4" stroke-width="4"/></svg></div>
       <div class="brand-copy"><h1>MY RADIO</h1><p class="sub">世界に1つ、あなただけの放送局</p></div>
     </header>
 
@@ -492,7 +604,7 @@ h2{color:#e0b994}.card{border-radius:12px;box-shadow:0 6px 22px #00000025;}
       <button class="btn" id="disarm">解除</button>
     </div>
     <div class="status" id="astatus">未設定</div>
-    <p class="note">時刻になるとチャイムが鳴り、ラジオが始まります。ブラウザ版のため、このページを開いたまま画面を点けておいてください。</p>
+    <p class="note">iOS 26以降では画面を消していてもアラームが鳴ります。「放送開始」を押すと放送が始まります。iPhone本体の電源は入れておいてください。</p>
   </div>
 
   <div class="card">
@@ -572,15 +684,18 @@ function stopRadio(){playing=false;cancelSpeech();$("play").textContent="▶ ラ
 async function lockScreen(){try{if(navigator.wakeLock&&!wake){wake=await navigator.wakeLock.request("screen");wake.addEventListener("release",()=>wake=null)}}catch(e){}}
 function ensureAudio(){try{ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();ctx.resume()}catch(e){}}
 function chime(){if(!ctx)return 0;let t=ctx.currentTime;for(let i=0;i<6;i++){const o=ctx.createOscillator(),g=ctx.createGain();o.frequency.value=i%2?880:660;g.gain.setValueAtTime(.25,t+i*.4);g.gain.exponentialRampToValueAtTime(.001,t+i*.4+.35);o.connect(g);g.connect(ctx.destination);o.start(t+i*.4);o.stop(t+i*.4+.4)}return 2600}
+let nativeAlarmText='未設定';
+window.radioAlarmStatus=function(text){nativeAlarmText=text;$('astatus').textContent=text};
 function arm(ms,daily){
+ if(hasNative()){sendNative({type:'schedule',time:$('time').value,daily,delaySeconds:ms/1000,feature:$('progAlarm').checked});return;}
  ensureAudio();
  if(!hasNative()){const u=new SpeechSynthesisUtterance(" ");u.volume=0;speechSynthesis.speak(u)}
  alarmAt=Date.now()+ms;alarmDaily=daily;lockScreen();save();status();
  sendNative({type:"schedule",time:$("time").value,daily,delaySeconds:ms/1000});
 }
 function nextOccurrence(){const [h,m]=$("time").value.split(":").map(Number);const d=new Date();d.setHours(h,m,0,0);if(d<=new Date())d.setDate(d.getDate()+1);return d-Date.now()}
-function status(){if(!alarmAt){$("astatus").textContent="未設定";return}const r=Math.max(0,alarmAt-Date.now());const h=Math.floor(r/36e5),m=Math.floor(r%36e5/6e4),s=Math.floor(r%6e4/1e3);$("astatus").textContent="セット中:あと"+(h?h+"時間":"")+(m||h?m+"分":"")+s+"秒"+(alarmDaily?"(毎日くり返し)":"")}
-setInterval(()=>{if(alarmAt&&Date.now()>=alarmAt){const wait=chime();if(alarmDaily)alarmAt=Date.now()+nextOccurrence();else alarmAt=null;setTimeout(()=>$("progAlarm").checked?startProgram(0):startRadio(),wait)}status()},1000);
+function status(){if(hasNative()){$("astatus").textContent=nativeAlarmText;return;}if(!alarmAt){$("astatus").textContent="未設定";return}const r=Math.max(0,alarmAt-Date.now());const h=Math.floor(r/36e5),m=Math.floor(r%36e5/6e4),s=Math.floor(r%6e4/1e3);$("astatus").textContent="セット中:あと"+(h?h+"時間":"")+(m||h?m+"分":"")+s+"秒"+(alarmDaily?"(毎日くり返し)":"")}
+setInterval(()=>{if(!hasNative()&&alarmAt&&Date.now()>=alarmAt){const wait=chime();if(alarmDaily)alarmAt=Date.now()+nextOccurrence();else alarmAt=null;setTimeout(()=>$("progAlarm").checked?startProgram(0):startRadio(),wait)}status()},1000);
 $("arm").onclick=()=>arm(nextOccurrence(),true);
 $("test").onclick=()=>arm(10000,false);
 $("disarm").onclick=()=>{alarmAt=null;sendNative({type:"cancelAlarm"});status()};
