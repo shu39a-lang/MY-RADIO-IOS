@@ -1,72 +1,9 @@
-選択されていません
-ライブラリ
-
-
-
-ライブラリを検索
-
-新規
-
-
-すべて
-
-お気に入り
-
-画像
-
-ドキュメント
-
-名前
-更新日時
-サイズ
-
-ライブラリ
-/
-project_047.yml
-
-共有
-1
-2
-3
-4
-5
-6
-7
-8
-9
-10
-11
-12
-13
-14
-15
-16
-17
-18
-19
-20
-21
-22
-23
-24
-25
-26
-27
-28
-29
-30
-31
-32
-33
-34
-35
-36
 name: MyRadio
 options:
   bundleIdPrefix: jp.myradio
   deploymentTarget:
     iOS: '17.0'
-  xcodeVersion: '16.0'
+  xcodeVersion: '26.3'
 settings:
   base:
     SWIFT_VERSION: '5.0'
@@ -97,4 +34,20 @@ targets:
       properties:
         CFBundleURLTypes:
           - CFBundleURLSchemes: [myradio]
-
+            CFBundleURLName: jp.myradio.personal
+        NSAlarmKitUsageDescription: 設定した時刻に画面を閉じていても目覚ましを鳴らすために使用します。
+        UIBackgroundModes: [audio]
+        UIApplicationSupportsIndirectInputEvents: true
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+  MyRadioTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [MyRadioTests]
+    dependencies:
+      - target: MyRadio
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: jp.myradio.personal.tests
