@@ -62,7 +62,7 @@ private struct MyRadioHTMLView: UIViewRepresentable {
         do {
             let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let url = folder.appendingPathComponent("myradio-screen-v047.html")
+            let url = folder.appendingPathComponent("myradio-screen-v048.html")
             try EmbeddedRadioPage.html.write(to: url, atomically: true, encoding: .utf8)
             web.loadFileURL(url, allowingReadAccessTo: folder)
         } catch {
@@ -438,8 +438,8 @@ private struct MyRadioHTMLView: UIViewRepresentable {
 
         func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                     withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-            // Foreground playback is controlled by the HTML timer.
-            completionHandler([])
+            // Also show reminder notifications while the app is in the foreground.
+            completionHandler([.banner, .sound])
         }
         func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                     withCompletionHandler completionHandler: @escaping () -> Void) {
@@ -457,6 +457,17 @@ private struct MyRadioHTMLView: UIViewRepresentable {
         }
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             showLoadError(in: webView)
+        }
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            guard let url = navigationAction.request.url else { decisionHandler(.cancel); return }
+            if navigationAction.navigationType == .linkActivated,
+               ["https", "http"].contains(url.scheme?.lowercased() ?? "") {
+                UIApplication.shared.open(url)
+                decisionHandler(.cancel)
+                return
+            }
+            decisionHandler(url.isFileURL || url.scheme == "about" ? .allow : .cancel)
         }
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             showLoadError(in: webView)
@@ -574,7 +585,7 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
 
   <div class="card">
     <h2>聴きたい話題</h2>
-    <p class="note" style="margin:-5px 0 10px">選んだ話題を1項目ずつ、約2分以上かけて詳しくお届けします。</p>
+    <p class="note" style="margin:-5px 0 10px">選んだ分野のニュース見出しと背景知識をお届けします。背景知識は1項目約2分が目安です。声や記事によって長さが変わります。</p>
     <div class="chips" id="topics"></div>
   </div>
 
@@ -614,12 +625,22 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
   </div>
 
   <button class="big" id="play">▶ ラジオを始める</button>
+  <button class="btn" id="preview" style="width:100%;margin-top:10px">番組表を作ってから聴く</button>
+
+  <section class="card" id="lineupcard" style="margin-top:14px" hidden>
+    <h2>自分で編集する番組表</h2>
+    <p class="note">ニュース見出しと背景知識は別の内容です。再生前に順番を変えたり、不要な項目を外せます。</p>
+    <div id="lineup"></div>
+    <button class="btn pri" id="lineupplay">この順番で放送開始</button>
+    <button class="btn" id="nextsegment" disabled>次の項目へ</button>
+    <p class="status" id="lineupstatus" role="status" aria-live="polite"></p>
+  </section>
 
   <div class="card" style="margin-top:14px">
     <h2>放送中のことば</h2>
     <div id="log"><p class="note">ここに読み上げた内容が表示されます。</p></div>
   </div>
-  <p class="note">放送済みの記事は再放送しません。履歴はこの端末に保存されます。新しい放送の取得にはインターネット接続が必要です。</p>
+  <p class="note">読み上げを開始した記事は次の番組作成から除外します。履歴はこの端末に保存されます。新しい放送の取得にはインターネット接続が必要です。ニュースはGoogleニュース経由の見出し、背景知識はWikipediaの抜粋です。生成AIとの会話や放送局の生放送ではありません。</p>
 </main>
 
 <script>
@@ -673,7 +694,7 @@ function utter(text,done){
  }
  const u=new SpeechSynthesisUtterance(text);u.lang="ja-JP";const v=pickVoice();if(v)u.voice=v;const s=style();u.pitch=s.pitch;u.rate=Math.min(s.rate,1.0);u.onend=done;u.onerror=done;speechSynthesis.speak(u)
 }
-function speakOne(t){cancelSpeech();utter(t,()=>{})}
+function speakOne(t){if(playing)stopRadio();cancelSpeech();utter(t,()=>{})}
 function greeting(){const d=new Date(),h=d.getHours(),m=d.getMinutes();const w="日月火水木金土"[d.getDay()];const hi=h<11?"おはようございます。":h<18?"こんにちは。":"こんばんは。";return hi+"マイラジオの時間です。"+(d.getMonth()+1)+"月"+d.getDate()+"日、"+w+"曜日、"+h+"時"+m+"分をお知らせします。"}
 function buildLines(){const L=[{t:greeting()}];[...sel].forEach(k=>{const T=TOPICS[k];L.push({t:"続いて、"+T.n+"の話題です。"});pickEps(k).forEach(x=>L.push({t:x}))});L.push({t:"以上、マイラジオでした。今日も良い一日を。"});return L}
 function startRadio(){stopRadio();if(!sel.size){alert("話題を1つ以上選んでください");return}playing=true;$("play").textContent="■ 停止";$("log").innerHTML="";const lines=buildLines();let i=0;lockScreen();const next=()=>{if(!playing)return;if(i>=lines.length){stopRadio();return}const l=lines[i++];document.querySelectorAll("#log p.now").forEach(p=>p.classList.remove("now"));const p=document.createElement("p");p.className="now";p.textContent=l.t;$("log").appendChild(p);$("log").scrollTop=1e6;utter(l.t,next)};next()}
@@ -836,23 +857,19 @@ function fillDev(){const sl=$("devv");if(!sl)return;const vs=hasNative() ? (wind
 function renderVoices(){$("voices").innerHTML="";STYLES.forEach(s=>{const b=document.createElement("button");b.className="chip"+(s.id===styleId?" on":"");b.textContent=s.n;b.onclick=()=>{styleId=s.id;save();renderVoices();speakOne("こんにちは。この声でお届けします。")};$("voices").appendChild(b)});fillDev()}
 (function(){const d=document.createElement("div");d.innerHTML='<div class="row" style="margin-top:10px"><select id="devv" style="width:100%;font:inherit;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink)"></select></div><p class="note" id="vnote"></p>';$("voices").after(d);$("devv").onchange=e=>{devVoice=e.target.value;try{localStorage.setItem("myradio_dv",devVoice);persistNative("myradio_dv",devVoice)}catch(x){}speakOne("こんにちは。この声でお届けします。")}})();
 if("speechSynthesis" in window)speechSynthesis.onvoiceschanged=fillDev;setTimeout(fillDev,1200);
-let SAMPLE=null,pend=0,genDone=true;
-(async()=>{try{if(window.claude&&window.claude.use)SAMPLE=await window.claude.use("sample")}catch(e){}if(!SAMPLE){const mode=$("aiMode");if(mode){mode.checked=false;mode.disabled=true}const notice=$("aino");if(notice)notice.style.display="block"}})();
-const dayNo=()=>Math.floor((Date.now()-new Date(new Date().getFullYear(),0,0))/864e5);
-function hist(){try{return JSON.parse((window.__myradioSaved?.myradio_hist ?? localStorage.getItem("myradio_hist"))||"{}")}catch(e){return{}}}
-function addHist(k,t){const h=hist();h[k]=(h[k]||[]).concat(t).slice(-60);try{localStorage.setItem("myradio_hist",JSON.stringify(h));persistNative("myradio_hist",JSON.stringify(h))}catch(e){}}
-function say(t){pend++;const u=new SpeechSynthesisUtterance(t);u.lang="ja-JP";const v=pickVoice();if(v)u.voice=v;const s=style();u.pitch=s.pitch;u.rate=s.rate;u.onstart=()=>{const L=$("log");L.querySelectorAll("p.now").forEach(p=>p.classList.remove("now"));const p=document.createElement("p");p.className="now";p.textContent=t;L.appendChild(p);while(L.children.length>8)L.removeChild(L.firstChild);L.scrollTop=1e6};const end=()=>{pend--;if(genDone&&pend<=0&&playing)stopRadio()};u.onend=end;u.onerror=end;speechSynthesis.speak(u)}
-function parseEp(t){const ls=t.trim().split(/\n+/);let title="";if(/^題[::]/.test(ls[0]))title=ls.shift().replace(/^題[::]\s*/,"").trim();const body=ls.join("").replace(/[#*•]/g,"");return{title,sents:body.split("。").map(s=>s.trim()).filter(Boolean).map(s=>s+"。")}}
-async function genEpisode(it){const h=(hist()[it.key]||[]).slice(-30);const d=new Date();const p="あなたは日本語のラジオパーソナリティです。次のテーマで、ラジオで読み上げるお話を書いてください。\nテーマ: "+it.q+"\n長さ: 約1000文字(3〜4分)\n条件:\n・1つの具体的な事柄を選び、背景や理由まで深く掘り下げる\n・聞き手に語りかける、です・ます調の話し言葉\n・箇条書き、記号、絵文字、括弧書きは使わない\n・確かな事実だけを書き、自信のない数字や年号は断定しない\n・今日は"+(d.getMonth()+1)+"月"+d.getDate()+"日(1年の"+dayNo()+"日目)。季節や日付にちなんだ切り口を選んでもよい\n・次の題で話した内容は避ける: "+(h.join("、")||"なし")+"\n・危険な行為の方法や、医療・投資の断定的な助言は避ける\n出力形式: 1行目は「題:」に続けて15文字以内の題名。2行目以降は本文のみ。";const r=await SAMPLE(p,{modelTier:"quick",cache:false});const e=parseEp(r.text);if(!e.sents.length)throw 0;if(e.title)addHist(it.key,e.title);return e}
-async function runAI(items){stopRadio();playing=true;pend=0;genDone=false;$("play").textContent="■ 停止";$("log").innerHTML="";lockScreen();say(greeting());for(const it of items){if(!playing)return;say(it.req?"リクエストをいただいた、"+it.name+"について、お話しします。":"続いて、"+it.name+"の話題です。");const g=document.createElement("p");g.className="note";g.textContent="お話を作っています…";$("log").appendChild(g);let e=null;try{e=await genEpisode(it)}catch(x){}g.remove();if(!playing)return;if(e){if(e.title)say("今日のお話は、"+e.title+"です。");e.sents.forEach(say)}else if(TOPICS[it.key]){pickEps(it.key).forEach(say)}else say("うまくお話を作れませんでした。時間をおいて、もう一度お試しください。")}say("以上、マイラジオでした。今日も良い一日を。");genDone=true}
-const _start=startRadio;startRadio=function(){if(SAMPLE&&$("aiMode")?.checked&&sel.size){runAI([...sel].map(k=>({name:TOPICS[k].n,key:k,q:TOPICS[k].n})))}else _start()};
 function renderReq(){$('reqhist').textContent='';reqStatus('')}
 // One visible response for every tap; built-in stories work without internet.
 // When the iPhone has internet, read the introduction of a related Wikipedia article.
 let requestSerial=0;
-function reqStatus(text){$("reqstatus").textContent=$("req").value.trim()}
+function reqStatus(text){$("reqstatus").textContent=text || $("req").value.trim()}
 $('req').addEventListener('input',()=>reqStatus(''));
-function reqSource(title,url){$('reqsource').textContent=''}
+function reqSource(title,url){
+ const box=$('reqsource');box.textContent='';
+ if(!title||!/^https:\/\//.test(url))return;
+ const link=document.createElement('a');link.href=url;link.target='_blank';link.rel='noopener noreferrer';
+ link.textContent='背景知識の出典：Wikipedia「'+title+'」';box.appendChild(link);
+ const license=document.createElement('a');license.href='https://creativecommons.org/licenses/by-sa/4.0/deed.ja';license.target='_blank';license.rel='noopener noreferrer';license.textContent=' ／ CC BY-SA 4.0（抜粋・読み上げ用に整形）';box.appendChild(license);
+}
 function requestLines(lines,status){
   stopRadio();
   playing=true;
@@ -1014,7 +1031,7 @@ async function obtainArticles(key,query,count,token){
  return queue.slice(0,count);
 }
 const stopBeforeDaily=stopRadio;
-stopRadio=function(){dailyRun++;stopBeforeDaily()};
+stopRadio=function(){dailyRun++;stopBeforeDaily();nextPrepared=null;activeSegment=-1;renderLineup()};
 function renderDailyFeature(){
  const key=featureKey();document.querySelector('.ptitle').textContent='🎙 '+localDay()+'｜'+TOPICS[key].n+'の特集・約10分';
  $('chs').textContent='今日のテーマ：'+TOPICS[key].n+'。最新ニュースと未放送の5つの背景解説をお届けします。';
@@ -1049,8 +1066,66 @@ function showNewsSource(n){
  const box=document.createElement('p');box.className='note';
  const a=document.createElement('a');a.href=n.url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=n.source+'｜'+newsTime(n.publishedAt)+'公開（日本時間）｜元の記事';box.appendChild(a);$('log').appendChild(box);
 }
-async function playFresh(specs,feature=false){
- stopRadio();const token=dailyRun;playing=true;setProgUI(feature);$('play').textContent='■ 停止';$('log').textContent='最新ニュースと未放送の背景解説を準備しています…';lockScreen();
+let preparedSegments=[],preparedFeature=false,preparedAt=0,activeSegment=-1,nextPrepared=null;
+function segmentAvailable(item){return item.kind==='news'?freshNews(item.news)&&unseenNews(item.news):unseen(item.article)}
+function renderLineup(){
+ const box=$('lineup');box.textContent='';$('lineupcard').hidden=!preparedSegments.length;
+ preparedSegments.forEach((item,index)=>{
+  const row=document.createElement('div');row.className='card';row.style.padding='10px';
+  const heading=document.createElement('p');heading.textContent=(index+1)+'. '+(item.kind==='news'?'ニュース見出し｜':'背景知識｜')+item.title;row.appendChild(heading);
+  const info=document.createElement('p');info.className='note';
+  info.textContent=playing&&activeSegment===index?'読み上げ中':segmentAvailable(item)?'未放送':'読み上げ開始済み、または公開から24時間経過';row.appendChild(info);
+  const link=document.createElement('a');link.target='_blank';link.rel='noopener noreferrer';
+  link.href=item.kind==='news'?item.news.url:item.article.url;
+  link.textContent=item.kind==='news'?item.news.source+'｜'+newsTime(item.news.publishedAt)+'公開｜記事を開く':'Wikipedia｜出典を開く';row.appendChild(link);
+  if(item.kind==='background'){const credit=document.createElement('p');credit.className='note';credit.textContent='CC BY-SA 4.0／抜粋・読み上げ用に整形';row.appendChild(credit);}
+  const controls=document.createElement('div');controls.className='row';
+  for(const [label,delta] of [['↑ 前へ',-1],['↓ 後へ',1],['外す',0]]){
+   const b=document.createElement('button');b.className='btn';b.textContent=label;b.setAttribute('aria-label',item.title+'を'+label);
+   b.disabled=playing||(delta===-1&&index===0)||(delta===1&&index===preparedSegments.length-1);
+   b.onclick=()=>{if(playing)return;if(delta===0)preparedSegments.splice(index,1);else [preparedSegments[index],preparedSegments[index+delta]]=[preparedSegments[index+delta],preparedSegments[index]];renderLineup()};controls.appendChild(b);
+  }
+  row.appendChild(controls);box.appendChild(row);
+ });
+ const remaining=preparedSegments.filter(segmentAvailable).length;
+ $('lineupplay').disabled=playing||!remaining;
+ $('nextsegment').disabled=!playing||!nextPrepared;
+ $('lineupstatus').textContent=playing?'放送中。停止するには「停止」、項目を飛ばすには「次の項目へ」を押してください。':'未放送 '+remaining+'項目。再開すると読み上げ開始済みの項目を飛ばします。';
+}
+function playPrepared(){
+ stopRadio();const token=dailyRun;let cursor=0,utteranceGeneration=0;
+ playing=true;setProgUI(preparedFeature);$('play').textContent='■ 停止';$('log').textContent='';
+ const stamp=document.createElement('p');stamp.className='note';stamp.textContent='ニュース取得：'+newsTime(preparedAt)+'（日本時間）';$('log').appendChild(stamp);
+ lockScreen();
+ const advance=()=>{
+  if(token!==dailyRun||!playing)return;
+  const generation=++utteranceGeneration;cancelSpeech();
+  while(cursor<preparedSegments.length&&!segmentAvailable(preparedSegments[cursor]))cursor++;
+  if(cursor===preparedSegments.length){activeSegment=-1;nextPrepared=null;stopRadio();$('lineupstatus').textContent='番組終了。新しい内容を聴くには番組を作り直してください。';return;}
+  activeSegment=cursor;const item=preparedSegments[cursor++];let lines;
+  if(item.kind==='news'){
+   const n=item.news;for(const k of newsKeys(n))uniqueState.seen[k]=localDay();uniqueState.newsTitles.push(headline(n));
+   lines=['最新ニュースの見出しをご紹介します。'+n.source+'が、日本時間'+newsTime(n.publishedAt)+'に公開した記事です。',spokenText(headline(n))+'。','詳しい内容は、画面の元の記事からご覧いただけます。'];
+  }else{
+   const a=item.article;for(const k of articleKeys(a))uniqueState.seen[k]=localDay();
+   lines=['ここからは最新ニュースとは別に、同じ分野の背景知識をお届けします。テーマは、'+a.title+'です。',...splitForSpeech(spokenText(a.text))];
+  }
+  try{saveUnique()}catch(e){nextPrepared=null;stopRadio();$('log').textContent='放送履歴を保存できないため再生を停止しました。';return;}
+  if(item.kind==='news')showNewsSource(item.news);else reqSource(item.article.title,item.article.url);
+  renderLineup();let lineIndex=0;
+  const speakNext=()=>{
+   if(token!==dailyRun||!playing||generation!==utteranceGeneration)return;
+   if(lineIndex===lines.length){advance();return;}
+   const text=lines[lineIndex++];const p=document.createElement('p');p.textContent=text;$('log').appendChild(p);$('log').scrollTop=1e6;utter(text,speakNext);
+  };speakNext();
+ };
+ nextPrepared=advance;advance();
+}
+$('lineupplay').onclick=playPrepared;
+$('nextsegment').onclick=()=>{if(playing&&nextPrepared)nextPrepared()};
+$('preview').onclick=()=>{if(!sel.size){reqStatus('話題を1つ以上選んでください。');return;}playFresh([...sel].map(key=>({key,query:DAILY_QUERIES[key]||TOPICS[key].n,count:1})),false,true)};
+async function playFresh(specs,feature=false,preview=false){
+ stopRadio();preparedSegments=[];const token=dailyRun;playing=true;renderLineup();setProgUI(feature);$('play').textContent='■ 停止';$('log').textContent='最新ニュースと未放送の背景解説を準備しています…';lockScreen();
  try{
   const articles=[],news=[];let fetchedAt=Date.now();
   for(const spec of specs){
@@ -1079,43 +1154,22 @@ async function playFresh(specs,feature=false){
   if(token!==dailyRun)return;
   const expected=specs.reduce((n,s)=>n+s.count,0);
   if(articles.length!==expected)throw Error('項目間で背景解説が重複したため、放送を見合わせました。別の項目でお試しください。');
-  $('log').innerHTML='';
-  const stamp=document.createElement('p');stamp.className='note';stamp.textContent='ニュース取得：'+newsTime(fetchedAt)+'（日本時間）／公開24時間以内';$('log').appendChild(stamp);
-  const lines=[];
+  preparedSegments=[];
   for(const a of articles){
-   for(const n of a.news){lines.push({news:n,text:'最新ニュースの見出しをご紹介します。'+n.source+'が、日本時間'+newsTime(n.publishedAt)+'に公開した記事です。'+spokenText(headline(n))+'。詳しい内容は、画面の元の記事からご覧いただけます。'})}
-   lines.push({article:a,text:'ここからは最新ニュースとは別に、同じ分野の背景知識をお届けします。テーマは、'+a.title+'です。'});
-   for(const text of splitForSpeech(spokenText(a.text)))lines.push({text});
+   for(const n of a.news)preparedSegments.push({kind:'news',title:headline(n),news:n});
+   preparedSegments.push({kind:'background',title:a.title,article:a});
   }
-  lines.push({text:'今日はここまでです。お聴きいただき、ありがとうございました。またお会いしましょう。マイラジオでした。'});
-  let index=0;
-  const next=()=>{
-   if(token!==dailyRun||!playing)return;
-   if(index===lines.length){stopRadio();const end=document.createElement('p');end.className='note';end.textContent='放送終了';$('log').appendChild(end);return}
-   const line=lines[index++];
-   if(line.news){
-    const n=line.news;if(!freshNews(n)||!unseenNews(n)){next();return}
-    for(const k of newsKeys(n))uniqueState.seen[k]=localDay();
-    uniqueState.newsTitles.push(headline(n));
-    try{saveUnique()}catch(e){stopRadio();$('log').textContent='放送履歴を保存できないため再生を停止しました。';return}
-    showNewsSource(n);
-   }
-   if(line.article){
-    const a=line.article;if(!unseen(a)){stopRadio();return}
-    for(const key of articleKeys(a))uniqueState.seen[key]=localDay();
-    try{saveUnique()}catch(e){stopRadio();$('log').textContent='放送履歴を保存できないため再生を停止しました。';return}
-    reqSource(a.title,a.url);
-    const source=document.createElement('p');const link=document.createElement('a');link.href=a.url;link.target='_blank';link.textContent='背景解説の出典：Wikipedia「'+a.title+'」';source.appendChild(link);const license=document.createElement('a');license.href='https://creativecommons.org/licenses/by-sa/4.0/deed.ja';license.target='_blank';license.textContent=' ／ CC BY-SA 4.0（抜粋・読み上げ用に整形）';source.appendChild(license);$('log').appendChild(source);
-   }
-   const p=document.createElement('p');p.textContent=line.text;$('log').appendChild(p);$('log').scrollTop=1e6;utter(line.text,next);
-  };next();
+  preparedFeature=feature;preparedAt=fetchedAt;
+  stopRadio();renderLineup();
+  if(preview){$('log').textContent='番組表を用意しました。内容を選んで「この順番で放送開始」を押してください。';$('lineupcard').scrollIntoView({block:'nearest'});}
+  else playPrepared();
  }catch(e){if(token!==dailyRun)return;stopRadio();$('log').textContent=e.message;reqStatus(e.message)}
 }
 startRadio=function(){if(!sel.size){alert('話題を1つ以上選んでください');return}playFresh([...sel].map(key=>({key,query:DAILY_QUERIES[key]||TOPICS[key].n,count:1})))};
 startProgram=function(){refreshDaily();const key=featureKey();playFresh([{key,query:DAILY_QUERIES[key],count:5}],true)};
 // Replace the request listener too; no short/fixed fallback can replay an old explanation.
 $('reqgo').removeEventListener('click',onRequest);
-onRequest=function(){const query=$('req').value.trim();if(!query){reqStatus('聞きたいことを入力してください。');return}++requestSerial;playFresh([{key:'request:'+query,query,count:1}])};
+onRequest=function(){const query=$('req').value.trim();if(!query){reqStatus('聞きたいことを入力してください。');return}reqStatus(query);reqSource('','');++requestSerial;playFresh([{key:'request:'+query,query,count:1}])};
 $('reqgo').addEventListener('click',onRequest);
 
 renderReq();
@@ -1127,3 +1181,4 @@ renderTopics();renderVoices();
 
 """##
 }
+
