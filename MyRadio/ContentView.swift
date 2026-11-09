@@ -128,6 +128,7 @@ private struct MyRadioHTMLView: UIViewRepresentable {
         private var cachedJapaneseVoices: [AVSpeechSynthesisVoice]?
         private var audioSessionReady = false
         private var currentID: Int?
+        private var currentUtterance: AVSpeechUtterance?
         private var pendingLaunchFromNotification = false
         private let notificationID = "jp.myradio.personal.morning"
 
@@ -170,6 +171,7 @@ private struct MyRadioHTMLView: UIViewRepresentable {
                 speak(text, id: id, payload: payload)
             case "cancel":
                 currentID = nil
+                currentUtterance = nil
                 speech.stopSpeaking(at: .immediate)
             case "persist":
                 guard let key = payload["key"] as? String,
@@ -442,6 +444,7 @@ private struct MyRadioHTMLView: UIViewRepresentable {
 
         private func speak(_ text: String, id: Int, payload: [String: Any]) {
             currentID = nil
+            currentUtterance = nil
             speech.stopSpeaking(at: .immediate)
             let line = AVSpeechUtterance(string: text)
             // Voice enumeration can be slow on the first TTS call. Reuse the result
@@ -464,10 +467,11 @@ private struct MyRadioHTMLView: UIViewRepresentable {
                     ?? japanese.sorted { $0.quality.rawValue > $1.quality.rawValue }.first
                     ?? AVSpeechSynthesisVoice(language: "ja-JP")
             }
-            let pitch = (payload["pitch"] as? Double) ?? 1
             let speed = (payload["rate"] as? Double) ?? 1
-            line.pitchMultiplier = Float(min(2, max(0.5, pitch)))
-            line.rate = max(AVSpeechUtteranceMinimumSpeechRate, min(AVSpeechUtteranceMaximumSpeechRate, Float(0.5 * speed)))
+            // Preserve the voice recording's natural pitch; large shifts blur articulation.
+            line.pitchMultiplier = 1.0
+            line.volume = 1.0
+            line.rate = max(AVSpeechUtteranceMinimumSpeechRate, min(AVSpeechUtteranceMaximumSpeechRate, Float(0.5 * min(1.05, max(0.9, speed)))))
             if !audioSessionReady {
                 do {
                     try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
@@ -476,12 +480,14 @@ private struct MyRadioHTMLView: UIViewRepresentable {
                 } catch { /* Attempt again on the next sentence if activation fails. */ }
             }
             currentID = id
+            currentUtterance = line
             speech.speak(line)
         }
 
         func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-            guard let id = currentID else { return }
+            guard utterance === currentUtterance, let id = currentID else { return }
             currentID = nil
+            currentUtterance = nil
             DispatchQueue.main.async { [weak self] in
                 self?.web?.evaluateJavaScript("window.radioSpeechDidFinish(" + String(id) + ")", completionHandler: nil)
             }
@@ -804,13 +810,14 @@ const $=id=>document.getElementById(id);
 const hasNative=()=>!!window.webkit?.messageHandlers?.radio;
 function sendNative(msg){if(hasNative())window.webkit.messageHandlers.radio.postMessage(msg)}
 function persistNative(key,value){sendNative({type:"persist",key,value})}
-let nativeID=0;
+let nativeID=0, browserSpeechGeneration=0;
 const nativeDone=new Map();
 window.radioSpeechDidFinish=function(id){const done=nativeDone.get(id);nativeDone.delete(id);if(done)done()};
 function cancelSpeech(){
   nativeDone.clear();
+  browserSpeechGeneration++;
+  if("speechSynthesis" in window)speechSynthesis.cancel();
   if(hasNative())sendNative({type:"cancel"});
-  else speechSynthesis.cancel();
 }
 window.radioNativeVoices=function(list){window.nativeRadioVoiceList=list; if(typeof fillDev==="function")fillDev()};
 function renderTopics(){$("topics").innerHTML="";for(const k in TOPICS){const b=document.createElement("button");b.className="chip"+(sel.has(k)?" on":"");b.textContent=TOPICS[k].e+" "+TOPICS[k].n;b.onclick=()=>{sel.has(k)?sel.delete(k):sel.add(k);save();renderTopics()};$("topics").appendChild(b)}}
@@ -820,12 +827,21 @@ function pickVoice(){const vs=(speechSynthesis.getVoices()||[]).filter(v=>/^ja/i
 function utter(text,done){
  text=spokenText(text);if(!text){queueMicrotask(done);return;}
  if(hasNative()){
+  // A native utterance must be the only active speech route.
+  browserSpeechGeneration++;
+  if("speechSynthesis" in window)speechSynthesis.cancel();
+  nativeDone.clear();
   const s=style();const id=++nativeID;
   nativeDone.set(id,done);
-  sendNative({type:"speak",id,text,gender:s.g,pitch:s.pitch,rate:Math.min(s.rate,1.0),voiceID:devVoice||""});
+  sendNative({type:"speak",id,text,gender:s.g,pitch:1.0,rate:Math.min(s.rate,1.0),voiceID:devVoice||""});
   return;
  }
- const u=new SpeechSynthesisUtterance(text);u.lang="ja-JP";const v=pickVoice();if(v)u.voice=v;const s=style();u.pitch=s.pitch;u.rate=Math.min(s.rate,1.0);u.onend=done;u.onerror=done;speechSynthesis.speak(u)
+ const generation=++browserSpeechGeneration;
+ speechSynthesis.cancel();
+ const u=new SpeechSynthesisUtterance(text);u.lang="ja-JP";const v=pickVoice();if(v)u.voice=v;const s=style();u.pitch=1.0;u.rate=Math.max(0.9,Math.min(s.rate,1.0));
+ let completed=false;
+ const finish=()=>{if(completed||generation!==browserSpeechGeneration)return;completed=true;done()};
+ u.onend=finish;u.onerror=finish;speechSynthesis.speak(u)
 }
 function speakOne(t){if(playing)stopRadio();cancelSpeech();utter(t,()=>{})}
 function greeting(){const d=new Date(),h=d.getHours(),m=d.getMinutes();const w="日月火水木金土"[d.getDay()];const hi=h<11?"おはようございます。":h<18?"こんにちは。":"こんばんは。";return hi+"マイラジオの時間です。"+(d.getMonth()+1)+"月"+d.getDate()+"日、"+w+"曜日、"+h+"時"+m+"分をお知らせします。"}
@@ -976,13 +992,13 @@ art:{n:"アート",e:"🎨",t:["ゴッホは、生きている間にほとんど
 });
 STYLES.length=0;STYLES.push(
 {id:"f1",n:"👩 お姉さん",g:"f",pitch:1.0,rate:1.0},
-{id:"f2",n:"🌟 元気な女の子",g:"f",pitch:1.75,rate:1.2},
-{id:"f3",n:"🌙 おだやかな女性",g:"f",pitch:0.75,rate:0.85},
+{id:"f2",n:"🌟 女性・明るい",g:"f",pitch:1.0,rate:1.2},
+{id:"f3",n:"🌙 おだやかな女性",g:"f",pitch:1.0,rate:0.94},
 {id:"m1",n:"👨 青年",g:"m",pitch:1.0,rate:1.0},
-{id:"m2",n:"🎩 渋い低音",g:"m",pitch:0.45,rate:0.85},
-{id:"m3",n:"📢 アナウンサー",g:"m",pitch:0.85,rate:1.15},
-{id:"m4",n:"👴 おじいさん",g:"m",pitch:0.55,rate:0.7},
-{id:"k1",n:"🧒 少年",g:"m",pitch:1.85,rate:1.15}
+{id:"m2",n:"🎩 男性・落ち着き",g:"m",pitch:1.0,rate:0.94},
+{id:"m3",n:"📢 アナウンサー",g:"m",pitch:1.0,rate:1.15},
+{id:"m4",n:"👨 男性・ゆっくり",g:"m",pitch:1.0,rate:0.9},
+{id:"k1",n:"👨 男性・軽快",g:"m",pitch:1.0,rate:1.15}
 );
 let devVoice="";try{devVoice=(window.__myradioSaved?.myradio_dv ?? localStorage.getItem("myradio_dv"))||""}catch(e){}
 function pickVoice(){const vs=(speechSynthesis.getVoices()||[]).filter(v=>/^ja/i.test(v.lang));if(devVoice){const d=vs.find(v=>v.voiceURI===devVoice);if(d)return d}const g=style().g;return vs.find(v=>(g==="f"?FEM:MAL).test(v.name))||vs.find(v=>!(g==="f"?MAL:FEM).test(v.name))||vs[0]||null}
