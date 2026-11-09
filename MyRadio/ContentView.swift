@@ -21,6 +21,9 @@ private enum RadioEditorialAI {
         報道の見出しだけから本文の詳細を推定しないでください。報道見出しと背景知識を混同せず、世の中に与える影響は可能性として話してください。
         Wikipediaなどの文章は転載・逐語読み上げをせず、事実をもとに新しい言葉で説明してください。
         導入→大切なポイント→身近な例→考察→聴取者への問いかけの流れを、見出しや番号を付けず自然な語りでまとめてください。
+        耳だけで理解できる話し言葉にしてください。一文には一つの内容を入れ、一文はおおむね40〜70字にします。
+        難しい専門語は最初に短く説明し、略語を続けて並べないでください。資料の数値、固有名詞、否定や条件の意味は変えないこと。
+        同じ語尾を機械的に繰り返さず、自然な接続と読点で話の流れを作ってください。
         大げさな煽りや、投資・医療に関する断定的な助言をしないでください。URL、資料注、絵文字、マークダウンは読み上げ原稿に不要です。
         この原稿は番組途中のニュースや解説として読み上げられます。短い総括は構いませんが、放送終了の挨拶は絶対に入れないでください。
         「今日はこれまで」「またお会いしましょう」「番組終了」などの文言を出力しないでください。
@@ -445,7 +448,7 @@ private struct MyRadioHTMLView: UIViewRepresentable {
         private func speak(_ text: String, id: Int, payload: [String: Any]) {
             currentID = nil
             currentUtterance = nil
-            speech.stopSpeaking(at: .immediate)
+            if speech.isSpeaking || speech.isPaused { speech.stopSpeaking(at: .immediate) }
             let line = AVSpeechUtterance(string: text)
             // Voice enumeration can be slow on the first TTS call. Reuse the result
             // for all following sentences instead of querying iOS repeatedly.
@@ -471,7 +474,7 @@ private struct MyRadioHTMLView: UIViewRepresentable {
             // Preserve the voice recording's natural pitch; large shifts blur articulation.
             line.pitchMultiplier = 1.0
             line.volume = 1.0
-            line.rate = max(AVSpeechUtteranceMinimumSpeechRate, min(AVSpeechUtteranceMaximumSpeechRate, Float(0.5 * min(1.05, max(0.9, speed)))))
+            line.rate = max(AVSpeechUtteranceMinimumSpeechRate, min(AVSpeechUtteranceMaximumSpeechRate, Float(0.47 * min(1.05, max(0.9, speed)))))
             if !audioSessionReady {
                 do {
                     try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
@@ -617,7 +620,7 @@ private struct MyRadioHTMLView: UIViewRepresentable {
             // Load the voice list while the screen opens, not after the Play tap.
             let japanese = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("ja") }
             cachedJapaneseVoices = japanese
-            let voices = japanese.map { ["name": $0.name, "voiceURI": $0.identifier,
+            let voices = japanese.sorted { $0.quality.rawValue > $1.quality.rawValue }.map { ["name": $0.name + ($0.quality.rawValue > 1 ? "（高品質）" : ""), "voiceURI": $0.identifier,
                                           "gender": $0.gender.rawValue == 1 ? "male" : "other"] }
             if let bytes = try? JSONSerialization.data(withJSONObject: voices),
                let literal = String(data: bytes, encoding: .utf8) {
@@ -825,7 +828,7 @@ function renderVoices(){$("voices").innerHTML="";STYLES.forEach(s=>{const b=docu
 function style(){return STYLES.find(s=>s.id===styleId)}
 function pickVoice(){const vs=(speechSynthesis.getVoices()||[]).filter(v=>/^ja/i.test(v.lang));const g=style().g;return vs.find(v=>(g==="f"?FEM:MAL).test(v.name))||vs.find(v=>!(g==="f"?MAL:FEM).test(v.name))||vs[0]||null}
 function utter(text,done){
- text=spokenText(text);if(!text){queueMicrotask(done);return;}
+ text=pronunciationText(text);if(!text){queueMicrotask(done);return;}
  if(hasNative()){
   // A native utterance must be the only active speech route.
   browserSpeechGeneration++;
@@ -1145,10 +1148,38 @@ async function fetchDaily(query,offset){
  if(!hasNative())throw Error('日替わり放送はiPhoneアプリでご利用ください。');
  return new Promise((resolve,reject)=>{const id=++dailySerial;const timer=setTimeout(()=>{dailyPending.delete(id);reject(Error('背景解説の取得がタイムアウトしました。'))},45000);dailyPending.set(id,{resolve,reject,timer});sendNative({type:'dailyLookup',id,query,offset})});
 }
+// Preserve quoted names, qualifications and numbers; only convert typography to pauses.
 function spokenText(text){
- const pairs={'（':'）','(':')','「':'」','『':'』'};const stack=[];let out='';
- for(const c of String(text)){if(pairs[c]){stack.push(pairs[c]);continue}if(stack.length){if(c===stack[stack.length-1])stack.pop();continue}out+=c}
- return out.replace(/\s+/g,' ').trim();
+ return String(text||'').replace(/[「」『』“”]/g,'')
+  .replace(/[（(【\[]/g,'、').replace(/[）)】\]]/g,'、')
+  .replace(/\s+/g,' ').replace(/、+/g,'、').replace(/、([。！？])/g,'$1').trim();
+}
+function pronunciationText(text){
+ return spokenText(text)
+  .replace(/https?:\/\/[^\s、。]+/g,'リンク先')
+  .replace(/\bAI\b/g,'エーアイ').replace(/\bSNS\b/g,'エスエヌエス')
+  .replace(/\bIT\b/g,'アイティー').replace(/\bQR\b/g,'キューアール')
+  .replace(/\bUSB\b/g,'ユーエスビー').replace(/\bWi-Fi\b/gi,'ワイファイ')
+  .replace(/\bGDP\b/g,'ジーディーピー').replace(/\bNPO\b/g,'エヌピーオー')
+  .replace(/(\d)[%％]/g,'$1パーセント')
+  .replace(/(\d)\s*km\b/gi,'$1キロメートル')
+  .replace(/(\d)\s*kg\b/gi,'$1キログラム')
+  .replace(/(\d)\s*cm\b/gi,'$1センチメートル')
+  .replace(/(\d)\s*mm\b/gi,'$1ミリメートル');
+}
+// Give the voice engine a short paragraph for connected intonation, not one sentence per restart.
+function speechParagraphs(lines){
+ const result=[];let pending='';
+ for(const line of lines){
+  const sentences=splitForSpeech(String(line));
+  for(const sentence of sentences){
+   if(pending&&(pending.length+sentence.length>200)){result.push(pending);pending='';}
+   pending+=sentence;
+   if(pending.length>=100){result.push(pending);pending='';}
+  }
+ }
+ if(pending)result.push(pending);
+ return result;
 }
 function cleanArticle(text){return spokenText(text).replace(/\n[^\n]{1,45}\n/g,'\n').replace(/\[[0-9]+\]/g,'').replace(/\s+/g,' ').trim()}
 function segment(text,min=850){
@@ -1506,7 +1537,7 @@ function playPrepared(){
   // The first word must not wait for an on-device AI model (up to 60 seconds).
   // Existing sourced facts and the locally edited explanation are ready now.
   // If AI finishes while this segment is playing, append its separate commentary.
-  lines = item.kind==='curated'?lines:curatedProgramLines(item, lines);
+  lines = speechParagraphs(item.kind==='curated'?lines:curatedProgramLines(item, lines));
   if(token!==dailyRun||!playing||generation!==utteranceGeneration)return;
   let lineIndex=0;
   const speakNext=()=>{
@@ -1534,7 +1565,7 @@ function playPrepared(){
       : item.kind==='curated'
         ? '続いて、収録済みの内容を基にした端末内AIの追加解説です。'
         : '続いて、背景資料を基にした端末内AIの追加解説です。';
-    lines.push(aiLead,...splitForSpeech(editorial));
+    lines.push(...speechParagraphs([aiLead,...splitForSpeech(editorial)]));
     }).catch(()=>{ /* AI不調でも収録済みの音声を止めずに続行する。 */ });
    },1200);
   }
