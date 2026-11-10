@@ -1,3 +1,4 @@
+
 import SwiftUI
 import WebKit
 import AVFoundation
@@ -487,6 +488,19 @@ private struct MyRadioHTMLView: UIViewRepresentable {
             speech.speak(line)
         }
 
+        func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
+                               willSpeakRangeOfSpeechString characterRange: NSRange,
+                               utterance: AVSpeechUtterance) {
+            guard utterance === currentUtterance, let id = currentID else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self, utterance === self.currentUtterance,
+                      self.currentID == id else { return }
+                self.web?.evaluateJavaScript(
+                    "window.radioSpeechProgress(" + String(id) + "," + String(characterRange.location) + "," + String(characterRange.length) + ")",
+                    completionHandler: nil)
+            }
+        }
+
         func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
             guard utterance === currentUtterance, let id = currentID else { return }
             currentID = nil
@@ -666,7 +680,10 @@ input[type=time]{font:inherit;padding:8px 10px;border-radius:10px;border:1px sol
 .btn.pri{background:var(--acc);color:var(--onacc);font-weight:700}
 .big{width:100%;padding:18px;font-size:19px;border-radius:16px;border:0;background:var(--acc);color:var(--onacc);font-weight:700}
 .status{font-size:13px;color:var(--mute);margin-top:8px}
-#log{max-height:240px;overflow-y:auto;font-size:15px}
+#log{height:240px;overflow-y:auto;font-size:15px;overflow-anchor:none}
+#log::before,#log::after{content:"";display:block;height:108px}
+#log:empty{height:auto}
+#log:empty::before,#log:empty::after{display:none}
 #log p{margin:0 0 8px}
 #log p.now{color:var(--acc);font-weight:600}
 .note{font-size:12px;color:var(--mute)}
@@ -817,6 +834,7 @@ let nativeID=0, browserSpeechGeneration=0;
 const nativeDone=new Map();
 window.radioSpeechDidFinish=function(id){const done=nativeDone.get(id);nativeDone.delete(id);if(done)done()};
 function cancelSpeech(){
+  speechFollow=null;
   nativeDone.clear();
   browserSpeechGeneration++;
   if("speechSynthesis" in window)speechSynthesis.cancel();
@@ -827,6 +845,30 @@ function renderTopics(){$("topics").innerHTML="";for(const k in TOPICS){const b=
 function renderVoices(){$("voices").innerHTML="";STYLES.forEach(s=>{const b=document.createElement("button");b.className="chip"+(s.id===styleId?" on":"");b.textContent=s.n;b.onclick=()=>{styleId=s.id;save();renderVoices();speakOne("こんにちは。この声でお届けします。")};$("voices").appendChild(b)})}
 function style(){return STYLES.find(s=>s.id===styleId)}
 function pickVoice(){const vs=(speechSynthesis.getVoices()||[]).filter(v=>/^ja/i.test(v.lang));const g=style().g;return vs.find(v=>(g==="f"?FEM:MAL).test(v.name))||vs.find(v=>!(g==="f"?MAL:FEM).test(v.name))||vs[0]||null}
+// Native and browser ranges use UTF-16 offsets in the exact spoken text.
+let speechFollow=null;
+function followSpokenText(text,id){
+ if(!playing)return;
+ const box=$('log'),p=box.lastElementChild;
+ if(!p||p.tagName!=='P')return;
+ box.querySelectorAll('p.now').forEach(el=>el.classList.remove('now'));
+ p.textContent=text;p.classList.add('now');
+ speechFollow={id,node:p.firstChild};
+ box.scrollIntoView({block:'center',behavior:'smooth'});
+ window.radioSpeechProgress(id,0,1);
+}
+window.radioSpeechProgress=function(id,start,length){
+ const follow=speechFollow;
+ if(!playing||!follow||follow.id!==id||!follow.node.isConnected)return;
+ const node=follow.node,total=node.length;if(!total)return;
+ const range=document.createRange();
+ const offset=Math.max(0,Math.min(total-1,start));
+ range.setStart(node,offset);range.setEnd(node,Math.min(total,offset+Math.max(1,length)));
+ const rect=range.getClientRects()[0];if(!rect)return;
+ const box=$('log'),bounds=box.getBoundingClientRect();
+ const top=box.scrollTop+rect.top+rect.height/2-bounds.top-box.clientTop-box.clientHeight/2;
+ if(Math.abs(top-box.scrollTop)>3)box.scrollTo({top:Math.max(0,top),behavior:'smooth'});
+};
 function utter(text,done){
  text=pronunciationText(text);if(!text){queueMicrotask(done);return;}
  if(hasNative()){
@@ -836,6 +878,7 @@ function utter(text,done){
   nativeDone.clear();
   const s=style();const id=++nativeID;
   nativeDone.set(id,done);
+  followSpokenText(text,id);
   sendNative({type:"speak",id,text,gender:s.g,pitch:1.0,rate:Math.min(s.rate,1.0),voiceID:devVoice||""});
   return;
  }
@@ -844,12 +887,14 @@ function utter(text,done){
  const u=new SpeechSynthesisUtterance(text);u.lang="ja-JP";const v=pickVoice();if(v)u.voice=v;const s=style();u.pitch=1.0;u.rate=Math.max(0.9,Math.min(s.rate,1.0));
  let completed=false;
  const finish=()=>{if(completed||generation!==browserSpeechGeneration)return;completed=true;done()};
+ followSpokenText(text,'browser:'+generation);
+ u.onboundary=e=>{if(generation===browserSpeechGeneration)window.radioSpeechProgress('browser:'+generation,e.charIndex,e.charLength||1)};
  u.onend=finish;u.onerror=finish;speechSynthesis.speak(u)
 }
 function speakOne(t){if(playing)stopRadio();cancelSpeech();utter(t,()=>{})}
-function greeting(){const d=new Date(),h=d.getHours(),m=d.getMinutes();const w="日月火水木金土"[d.getDay()];const hi=h<11?"おはようございます。":h<18?"こんにちは。":"こんばんは。";return hi+"マイラジオの時間です。"+(d.getMonth()+1)+"月"+d.getDate()+"日、"+w+"曜日、"+h+"時"+m+"分をお知らせします。"}
+function greeting(){const d=new Date(),h=d.getHours(),m=d.getMinutes();const w="日月火水木金土"[d.getDay()];const hi=h>=5&&h<11?"おはようございます。":h>=11&&h<18?"こんにちは。":"こんばんは。";return hi+"ラジオの時間です。"+(d.getMonth()+1)+"月"+d.getDate()+"日、"+w+"曜日、"+h+"時"+m+"分をお知らせします。"}
 function buildLines(){const L=[{t:greeting()}];[...sel].forEach(k=>{const T=TOPICS[k];L.push({t:"続いて、"+T.n+"の話題です。"});pickEps(k).forEach(x=>L.push({t:x}))});L.push({t:"以上、マイラジオでした。今日も良い一日を。"});return L}
-function startRadio(){stopRadio();if(!sel.size){alert("話題を1つ以上選んでください");return}playing=true;$("play").textContent="■ 停止";$("log").innerHTML="";const lines=buildLines();let i=0;lockScreen();const next=()=>{if(!playing)return;if(i>=lines.length){stopRadio();return}const l=lines[i++];document.querySelectorAll("#log p.now").forEach(p=>p.classList.remove("now"));const p=document.createElement("p");p.className="now";p.textContent=l.t;$("log").appendChild(p);$("log").scrollTop=1e6;utter(l.t,next)};next()}
+function startRadio(){stopRadio();if(!sel.size){alert("話題を1つ以上選んでください");return}playing=true;$("play").textContent="■ 停止";$("log").innerHTML="";const lines=buildLines();let i=0;lockScreen();const next=()=>{if(!playing)return;if(i>=lines.length){stopRadio();return}const l=lines[i++];document.querySelectorAll("#log p.now").forEach(p=>p.classList.remove("now"));const p=document.createElement("p");p.className="now";p.textContent=l.t;$("log").appendChild(p);utter(l.t,next)};next()}
 function stopRadio(){playing=false;cancelSpeech();$("play").textContent="▶ ラジオを始める"}
 async function lockScreen(){try{if(navigator.wakeLock&&!wake){wake=await navigator.wakeLock.request("screen");wake.addEventListener("release",()=>wake=null)}}catch(e){}}
 function ensureAudio(){try{ctx=ctx||new (window.AudioContext||window.webkitAudioContext)();ctx.resume()}catch(e){}}
@@ -1035,7 +1080,7 @@ function requestLines(lines,status){
     if(i>=lines.length){stopRadio();reqStatus(status+"（読み上げ終了）");return}
     const t=lines[i++];
     const p=document.createElement("p");p.className="now";p.textContent=t;
-    $("log").appendChild(p);$("log").scrollTop=1e6;
+    $("log").appendChild(p);
     utter(t,next);
   };
   next();
@@ -1545,7 +1590,7 @@ function playPrepared(){
    if(lineIndex===lines.length){advance();return;}
    const text=removeMidProgramGoodbye(lines[lineIndex++]);
    if(!text){queueMicrotask(speakNext);return;}
-   const p=document.createElement('p');p.textContent=text;$('log').appendChild(p);$('log').scrollTop=1e6;utter(text,speakNext);
+   const p=document.createElement('p');p.textContent=text;$('log').appendChild(p);utter(text,speakNext);
   };speakNext();
   if(radioAIAvaillable){
    // Let the speech engine start first; running the local model simultaneously
@@ -1570,7 +1615,13 @@ function playPrepared(){
    },1200);
   }
  };
- nextPrepared=advance;advance();
+ // Every new playback starts with one local-time greeting, before any topic.
+ activeSegment=-1;nextPrepared=null;renderLineup();
+ const opening=greeting(),p=document.createElement('p');p.textContent=opening;$('log').appendChild(p);
+ utter(opening,()=>{
+  if(token!==dailyRun||!playing)return;
+  nextPrepared=advance;advance();
+ });
 }
 $('lineupplay').onclick=playPrepared;
 $('nextsegment').onclick=()=>{if(playing&&nextPrepared)nextPrepared()};
@@ -1702,5 +1753,8 @@ renderTopics();renderVoices();
 
 """##
 }
+
+
+
 
 
