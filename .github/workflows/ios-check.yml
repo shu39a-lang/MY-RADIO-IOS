@@ -28,4 +28,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Verify news deduplication and embedded JavaScript
+        run: node --test tests/news-dedup.test.cjs
       - run: cd backend && npm test

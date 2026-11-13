@@ -37,7 +37,7 @@ private enum RadioEditorialAI {
         let session = LanguageModelSession(instructions: instructions)
         let isNews = kind == "news"
         let objective = isNews
-            ? "掲載媒体と見出しだけが確認済みです。見出しから分かる範囲を正確に一言で紹介し、背景の一般論、興味深い問い、複数の見方や将来への可能性を、仮説と明示して約220〜360字で語ってください。記事本文を読んだとは言わないこと。"
+            ? "掲載媒体と見出しだけが確認済みで、見出しは既に読み上げました。同じニュースの紹介や要約を繰り返さず、背景の一般論、興味深い問い、複数の見方や将来への可能性を、仮説と明示して約220〜360字で語ってください。記事本文を読んだとは言わないこと。"
             : "以下の背景資料を手がかりに、知識の面白さ、現代生活へのつながり、具体的なたとえ、AIならではの考察を交えて約400〜600字のオリジナル解説にしてください。"
         let prompt = """
         番組のテーマ：\(title)
@@ -102,7 +102,7 @@ private struct MyRadioHTMLView: UIViewRepresentable {
         }
         if let bytes = try? JSONSerialization.data(withJSONObject: saved),
            let literal = String(data: bytes, encoding: .utf8) {
-            let source = "window.__myradioSaved=Object.fromEntries(" + literal + ".map(e=>[e.key,e.value]));try{for(const e of " + literal + "){localStorage.setItem(e.key,e.value)}}catch(e){}"
+            let source = "window.__myradioSaved=Object.fromEntries(" + literal + ".map(e=>[e.key,e.value]));try{for(const e of " + literal + "){if(e.key!=='myradio_unique_v1')localStorage.setItem(e.key,e.value)}}catch(e){}"
             controller.addUserScript(WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         }
         config.userContentController = controller
@@ -1172,7 +1172,15 @@ $("req").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();o
 // All playback entry points use one permanent, cross-category article history.
 const UNIQUE_KEY="myradio_unique_v1";
 let uniqueState;
-try{uniqueState=JSON.parse(window.__myradioSaved?.[UNIQUE_KEY]||localStorage.getItem(UNIQUE_KEY)||"{}")}catch(e){uniqueState={}}
+function restoreUnique(nativeValue,localValue){
+ const read=value=>{try{const v=JSON.parse(value||'{}');return v&&typeof v==='object'&&!Array.isArray(v)?v:{}}catch(e){return {}}};
+ const native=read(nativeValue),local=read(localValue);
+ // Neither store may erase already heard items from the other store.
+ return {...local,...native,seen:{...local.seen,...native.seen},
+  newsTitles:[...new Set([...(local.newsTitles||[]),...(native.newsTitles||[])])]};
+}
+let localUnique;try{localUnique=localStorage.getItem(UNIQUE_KEY)}catch(e){}
+uniqueState=restoreUnique(window.__myradioSaved?.[UNIQUE_KEY],localUnique);
 uniqueState.seen=uniqueState.seen||{};
 uniqueState.queues=uniqueState.queues||{};
 uniqueState.cursors=uniqueState.cursors||{};
@@ -1274,16 +1282,48 @@ uniqueState.newsTitles=uniqueState.newsTitles||[];
 let newsSerial=0;
 const newsPending=new Map();
 const NEWS_QUERIES={tech:'テクノロジー',game:'ゲーム',music:'音楽',movie:'映画',travel:'旅行 観光',food:'グルメ',science:'科学 研究',anime:'アニメ',sports:'スポーツ',econ:'経済',history:'歴史 発見',space:'宇宙',health:'健康 研究',cooking:'料理',animal:'動物',nature:'自然 環境',words:'言葉 言語',book:'本 出版',work:'仕事 働き方',money:'金融',car:'鉄道 自動車',art:'美術 展覧会'};
-function headline(n){const suffix=' - '+n.source;return n.title.endsWith(suffix)?n.title.slice(0,-suffix.length):n.title}
-function normalizeHeadline(text){return text.normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]/gu,'')}
+function headline(n){
+ let text=String(n.title||'').normalize('NFKC').trim();
+ const source=String(n.source||'').normalize('NFKC').trim();
+ if(source){
+  for(const suffix of [' - '+source,' – '+source,' — '+source,' | '+source,'｜'+source,'('+source+')']){
+   if(text.endsWith(suffix)){text=text.slice(0,-suffix.length).trim();break;}
+  }
+ }
+ return text;
+}
+function normalizeHeadline(text){return String(text||'').normalize('NFKC').toLowerCase()
+ .replace(/【(?:速報|独自|詳報|更新|動画|写真)[^】]*】/gu,'')
+ .replace(/[\s\p{P}\p{S}]/gu,'')}
 function similarHeadline(a,b){
  a=normalizeHeadline(a);b=normalizeHeadline(b);if(a===b)return true;
  if(a.length<12||b.length<12)return false;
+ // Preserve materially changed figures (scores, dates, amounts) as new reports.
+ const numbers=s=>(s.match(/\d+(?:[.,]\d+)*/g)||[]).join('|');
+ if(numbers(a)!==numbers(b))return false;
+ const shorter=a.length<b.length?a:b,longer=a.length<b.length?b:a;
+ if(shorter.length>=18&&longer.includes(shorter))return true;
  const grams=s=>new Set(Array.from({length:s.length-1},(_,i)=>s.slice(i,i+2)));
  const x=grams(a),y=grams(b);let common=0;for(const v of x)if(y.has(v))common++;
- return 2*common/(x.size+y.size)>=0.72;
+ return 2*common/(x.size+y.size)>=0.72||
+  (Math.min(x.size,y.size)>=18&&common/Math.min(x.size,y.size)>=0.9);
 }
-function newsKeys(n){return ['news:'+n.id,'newsurl:'+n.url,'headline:'+contentKey(normalizeHeadline(headline(n)))]}
+function canonicalNewsURL(value){
+ try{const u=new URL(value);u.hash='';
+  for(const key of [...u.searchParams.keys()])if(/^(utm_|gclid$|fbclid$|oc$)/i.test(key))u.searchParams.delete(key);
+  u.searchParams.sort();return u.href;
+ }catch(e){return String(value||'')}
+}
+function newsKeys(n){return ['news:'+n.id,'newsurl:'+n.url,'newsurl:'+canonicalNewsURL(n.url),'headline:'+contentKey(normalizeHeadline(headline(n)))]}
+function distinctEditorial(text,heard){
+ const accepted=[];
+ for(const sentence of String(text||'').match(/[^。！？!?]+[。！？!?]*/g)||[]){
+  const part=sentence.trim();if(!part)continue;
+  if([...heard,...accepted].some(old=>similarHeadline(old,part)))continue;
+  accepted.push(part);
+ }
+ return accepted.join('');
+}
 const NEWS_MAX_AGE_MS=30*86400000;
 function freshNews(n){const age=Date.now()-Number(n.publishedAt);return Number.isFinite(age)&&age>=-300000&&age<=NEWS_MAX_AGE_MS}
 function todayNews(n){return Date.now()-Number(n.publishedAt)<=86400000}
@@ -1556,6 +1596,7 @@ function playPrepared(){
  const loadingWhileStarting=onlineLookupPending;
  stopRadio();onlineLookupPending=loadingWhileStarting;
  const token=dailyRun;let cursor=0,utteranceGeneration=0,goodbyeStarted=false;
+ const heardSentences=[];
  playing=true;setProgUI(preparedFeature);$('play').textContent='■ 停止';$('log').textContent='';
   const stamp=document.createElement('p');stamp.className='note';stamp.textContent='番組準備：'+newsTime(preparedAt)+'（日本時間）｜ニュースがなくても放送可能';$('log').appendChild(stamp);
  lockScreen();
@@ -1606,6 +1647,7 @@ function playPrepared(){
    if(lineIndex===lines.length){advance();return;}
    const text=removeMidProgramGoodbye(lines[lineIndex++]);
    if(!text){queueMicrotask(speakNext);return;}
+   heardSentences.push(...(text.match(/[^。！？!?]+[。！？!?]*/g)||[]));
    const p=document.createElement('p');p.textContent=text;$('log').appendChild(p);utter(text,speakNext);
   };speakNext();
   if(radioAIAvaillable){
@@ -1615,6 +1657,8 @@ function playPrepared(){
     if(token!==dailyRun||!playing||generation!==utteranceGeneration)return;
     createEditorial(item).then(editorial=>{
     if(token!==dailyRun||!playing||generation!==utteranceGeneration||!editorial)return;
+    editorial=distinctEditorial(removeMidProgramGoodbye(editorial),[...heardSentences,...(lines.join('。').match(/[^。！？!?]+[。！？!?]*/g)||[])]);
+    if(!editorial)return;
     uniqueState.editorialHistory=uniqueState.editorialHistory||[];
     if(uniqueState.seen[contentKey(editorial)]||uniqueState.editorialHistory.some(e=>similarHeadline(e.text,editorial)))return;
     uniqueState.seen[contentKey(editorial)]=localDay();
