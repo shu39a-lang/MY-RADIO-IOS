@@ -39,3 +39,21 @@ test('AI repeated sentences and already spoken headline are removed',()=>{
  const sentence='宇宙探査機が月面着陸に成功し新しい観測を開始。';
  assert.equal(ctx.distinctEditorial(sentence+'これからの観測結果が気になりますね。'+sentence,[sentence]),'これからの観測結果が気になりますね。');
 });
+
+vm.runInContext(source.slice(source.indexOf('function readingText('),source.indexOf('function pronunciationText(')),ctx);
+test('furigana and ruby are spoken once, including repeated cleanup',()=>{
+ for(const [input,want] of [
+  ['東京（とうきょう）のニュースです。','とうきょうのニュースです。'],
+  ['経済(けいざい)の話です。','けいざいの話です。'],
+  ['山田（読み：やまだ）さんです。','やまださんです。'],
+  ['ラジオ（らじお）です。','ラジオです。'],
+  ['<ruby>東京<rp>（</rp><rt>とうきょう</rt><rp>）</rp></ruby>です。','東京です。']
+ ]) {assert.equal(ctx.spokenText(input),want);assert.equal(ctx.spokenText(ctx.spokenText(input)),want);}
+});
+test('qualifications, numbers, quoted speech and intentional words survive',()=>{
+ for(const input of ['料金（無料ではない）です。','参加（こどものみ）です。','東京（あす開催）です。','価格（100円）です。','条件（ただし変更あり）です。']){
+  assert.equal(ctx.spokenText(input),input.replace('（','、').replace('）','、'));
+ }
+ assert.equal(ctx.spokenText('「はい、はい」と言いました。'),'はい、はいと言いました。');
+ assert.equal(ctx.spokenText('時々、いろいろ考えます。'),'時々、いろいろ考えます。');
+});

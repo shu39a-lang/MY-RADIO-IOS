@@ -26,6 +26,7 @@ private enum RadioEditorialAI {
         報道の見出しだけから本文の詳細を推定しないでください。報道見出しと背景知識を混同せず、世の中に与える影響は可能性として話してください。
         Wikipediaなどの文章は転載・逐語読み上げをせず、事実をもとに新しい言葉で説明してください。
         導入→大切なポイント→身近な例→考察→聴取者への問いかけの流れを、見出しや番号を付けず自然な語りでまとめてください。
+        漢字の後ろに読み仮名や同義語を括弧で添えないでください。同じ言葉・文を言い直して繰り返さないでください。
         耳だけで理解できる話し言葉にしてください。一文には一つの内容を入れ、一文はおおむね25〜55字にします。短い文と少し長い文を交え、句読点で自然な息継ぎを作ってください。
         難しい専門語は最初に短く説明し、略語を続けて並べないでください。資料の数値、固有名詞、否定や条件の意味は変えないこと。
         同じ語尾を機械的に繰り返さず、自然な接続と読点で話の流れを作ってください。
@@ -479,7 +480,9 @@ private struct MyRadioHTMLView: UIViewRepresentable {
             // Preserve the voice recording's natural pitch; large shifts blur articulation.
             line.pitchMultiplier = 1.0
             line.volume = 1.0
-            line.rate = max(AVSpeechUtteranceMinimumSpeechRate, min(AVSpeechUtteranceMaximumSpeechRate, Float(0.47 * min(1.05, max(0.9, speed)))))
+            line.rate = max(AVSpeechUtteranceMinimumSpeechRate, min(AVSpeechUtteranceMaximumSpeechRate, Float(0.42 * min(1.0, max(0.9, speed)))))
+            // A short breath between paragraphs keeps a calm, conversational cadence.
+            line.postUtteranceDelay = 0.32
             if !audioSessionReady {
                 do {
                     try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
@@ -888,9 +891,9 @@ function utter(text,done){
  }
  const generation=++browserSpeechGeneration;
  speechSynthesis.cancel();
- const u=new SpeechSynthesisUtterance(text);u.lang="ja-JP";const v=pickVoice();if(v)u.voice=v;const s=style();u.pitch=1.0;u.rate=Math.max(0.9,Math.min(s.rate,1.0));
+ const u=new SpeechSynthesisUtterance(text);u.lang="ja-JP";const v=pickVoice();if(v)u.voice=v;const s=style();u.pitch=1.0;u.rate=0.88*Math.max(0.9,Math.min(s.rate,1.0));
  let completed=false;
- const finish=()=>{if(completed||generation!==browserSpeechGeneration)return;completed=true;done()};
+ const finish=()=>{if(completed||generation!==browserSpeechGeneration)return;completed=true;setTimeout(()=>{if(generation===browserSpeechGeneration)done()},320)};
  followSpokenText(text,'browser:'+generation);
  u.onboundary=e=>{if(generation===browserSpeechGeneration)window.radioSpeechProgress('browser:'+generation,e.charIndex,e.charLength||1)};
  u.onend=finish;u.onerror=finish;speechSynthesis.speak(u)
@@ -1205,9 +1208,28 @@ async function fetchDaily(query,offset){
  if(!hasNative())throw Error('日替わり放送はiPhoneアプリでご利用ください。');
  return new Promise((resolve,reject)=>{const id=++dailySerial;const timer=setTimeout(()=>{dailyPending.delete(id);reject(Error('背景解説の取得がタイムアウトしました。'))},45000);dailyPending.set(id,{resolve,reject,timer});sendNative({type:'dailyLookup',id,query,offset})});
 }
-// Preserve quoted names, qualifications and numbers; only convert typography to pauses.
+// Remove explicit reading annotations before punctuation is converted into pauses.
+// Ordinary bracketed qualifications, figures and quoted speech remain intact.
+function readingText(text){
+ let value=String(text||'');
+ value=value.replace(/<ruby\b[^>]*>([\s\S]*?)<\/ruby>/gi,(_,body)=>body
+  .replace(/<r[tp]\b[^>]*>[\s\S]*?<\/r[tp]>/gi,'').replace(/<[^>]+>/g,''));
+ value=value.replace(/([\p{Script=Han}々〆ヵヶ]+)[（(]\s*(?:読み(?:方)?[：:]|よみ[：:]|ふりがな[：:])\s*([ぁ-ゖァ-ヺー・\s]+)[）)]/gu,'$2');
+ // A kana-only reading after a kanji word is conventional furigana.
+ // Keep explanatory clauses (including conditions and negation) as source content.
+ value=value.replace(/([\p{Script=Han}々〆ヵヶ]{2,})[（(]([ぁ-ゖー]{2,20})[）)]/gu,(whole,word,kana)=>{
+  if(/^(?:ただし|なお|または|あるいは|たとえば)|(?:では|によ|のため|を)|(?:です|ます|ない|あり|なし|のみ|など|ほか)$|^(?:あす|きのう|きょう)$/.test(kana))return whole;
+  return kana;
+ });
+ // Exact kana duplicates in parentheses are another form of reading annotation.
+ value=value.replace(/([ぁ-ゖァ-ヺー]{2,})[（(]([ぁ-ゖァ-ヺー]{2,})[）)]/gu,(whole,word,kana)=>{
+  const hiragana=t=>t.replace(/[ァ-ヶ]/g,c=>String.fromCharCode(c.charCodeAt(0)-0x60));
+  return hiragana(word)===hiragana(kana)?word:whole;
+ });
+ return value;
+}
 function spokenText(text){
- return String(text||'').replace(/[「」『』“”]/g,'')
+ return readingText(text).replace(/[「」『』“”]/g,'')
   .replace(/[（(【\[]/g,'、').replace(/[）)】\]]/g,'、')
   .replace(/\s+/g,' ').replace(/、+/g,'、').replace(/、([。！？])/g,'$1').trim();
 }
