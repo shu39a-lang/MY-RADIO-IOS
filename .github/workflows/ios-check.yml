@@ -25,6 +25,10 @@ jobs:
         run: |
           DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for devices in d["devices"].values() for x in devices if x["name"].startswith("iPhone")))')
           xcodebuild -project MyRadio.xcodeproj -scheme MyRadio -configuration Debug -destination "platform=iOS Simulator,id=$DEVICE_ID" CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO test
+      - name: Test playback in iPad WebKit
+        run: |
+          DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys,re; d=json.load(sys.stdin)["devices"]; runtimes=sorted(d,key=lambda s:tuple(map(int,re.findall(r"[0-9]+",s))),reverse=True); candidates=[x for runtime in runtimes for x in d[runtime] if x["name"].startswith("iPad")]; print(next((x["udid"] for x in candidates if "Air" in x["name"]),candidates[0]["udid"]))')
+          xcodebuild -project MyRadio.xcodeproj -scheme MyRadio -configuration Debug -destination "platform=iOS Simulator,id=$DEVICE_ID" CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO test
   api:
     runs-on: ubuntu-latest
     steps:
