@@ -147,8 +147,35 @@ private struct MyRadioHTMLView: UIViewRepresentable {
             super.init(); speech.delegate = self
             NotificationCenter.default.addObserver(self, selector: #selector(launchAlarmRadio), name: Notification.Name("RadioAlarmLaunch"), object: nil)
             NotificationCenter.default.addObserver(self, selector: #selector(launchAlarmRadio), name: UIApplication.didBecomeActiveNotification, object: nil)
+            // A previously active iPad audio session may become inactive after
+            // foregrounding, a phone call, Bluetooth disconnection or route changes.
+            NotificationCenter.default.addObserver(self, selector: #selector(invalidateSpeechAudioSession(_:)), name: UIApplication.didBecomeActiveNotification, object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(invalidateSpeechAudioSession(_:)), name: AVAudioSession.interruptionNotification, object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(invalidateSpeechAudioSession(_:)), name: AVAudioSession.routeChangeNotification, object: nil)
         }
         deinit { NotificationCenter.default.removeObserver(self) }
+
+        @objc private func invalidateSpeechAudioSession(_ notification: Notification) {
+            audioSessionReady = false
+        }
+
+        // Native iOS speech, not WKWebView's browser voice engine.
+        // Always reactivate before every utterance, including on iPad.
+        private func prepareSpeechAudioSession() -> Bool {
+            let session = AVAudioSession.sharedInstance()
+            do {
+                if !audioSessionReady {
+                    try session.setCategory(.playback, mode: .default, options: [])
+                }
+                try session.setActive(true)
+                audioSessionReady = true
+                return true
+            } catch {
+                audioSessionReady = false
+                NSLog("MyRadio audio activation failed: %@", String(describing: error))
+                return false
+            }
+        }
         @objc private func launchAlarmRadio() {
             guard UserDefaults.standard.bool(forKey: "radio.alarm.launch"),
                   let web = web, !web.isLoading else { return }
@@ -492,12 +519,12 @@ private struct MyRadioHTMLView: UIViewRepresentable {
             line.rate = max(AVSpeechUtteranceMinimumSpeechRate, min(AVSpeechUtteranceMaximumSpeechRate, Float(0.42 * min(1.0, max(0.9, speed)))))
             // A short breath between paragraphs keeps a calm, conversational cadence.
             line.postUtteranceDelay = 0.32
-            if !audioSessionReady {
-                do {
-                    try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
-                    try AVAudioSession.sharedInstance().setActive(true)
-                    audioSessionReady = true
-                } catch { /* Attempt again on the next sentence if activation fails. */ }
+            guard prepareSpeechAudioSession() else {
+                sendAIJavaScript("radioSpeechError", data: [
+                    "id": id,
+                    "message": "音声を開始できませんでした。iPadの音量・出力先を確認して、もう一度放送開始を押してください。"
+                ])
+                return
             }
             currentID = id
             currentUtterance = line
@@ -525,7 +552,16 @@ private struct MyRadioHTMLView: UIViewRepresentable {
                 self?.web?.evaluateJavaScript("window.radioSpeechDidFinish(" + String(id) + ")", completionHandler: nil)
             }
         }
-        func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {}
+        func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+            guard utterance === currentUtterance, let id = currentID else { return }
+            currentID = nil
+            currentUtterance = nil
+            audioSessionReady = false
+            sendAIJavaScript("radioSpeechError", data: [
+                "id": id,
+                "message": "音声が中断されました。再度、放送開始を押すと音声出力を設定し直します。"
+            ])
+        }
 
         private func scheduleAlarm(_ payload: [String: Any]) {
             UserDefaults.standard.set(payload["feature"] as? Bool ?? false, forKey: "radio.alarm.feature")
@@ -849,6 +885,17 @@ function persistNative(key,value){sendNative({type:"persist",key,value})}
 let nativeID=0, browserSpeechGeneration=0;
 const nativeDone=new Map();
 window.radioSpeechDidFinish=function(id){const done=nativeDone.get(id);nativeDone.delete(id);if(done)done()};
+window.radioSpeechError=function(result){
+ const id=result&&result.id;
+ if(!nativeDone.has(id))return;
+ nativeDone.delete(id);
+ if(playing){
+  stopRadio();
+  const notice=document.createElement('p');
+  notice.textContent=(result&&result.message)||'音声を開始できませんでした。';
+  $('log').appendChild(notice);
+ }
+};
 function cancelSpeech(){
   speechFollow=null;
   nativeDone.clear();
