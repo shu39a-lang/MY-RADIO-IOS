@@ -889,12 +889,11 @@ window.radioSpeechError=function(result){
  const id=result&&result.id;
  if(!nativeDone.has(id))return;
  nativeDone.delete(id);
- if(playing){
-  stopRadio();
-  const notice=document.createElement('p');
-  notice.textContent=(result&&result.message)||'音声を開始できませんでした。';
-  $('log').appendChild(notice);
- }
+ if(playing)stopRadio();
+ const notice=document.createElement('p');
+ notice.className='note';
+ notice.textContent=(result&&result.message)||'音声を開始できませんでした。';
+ $('log').appendChild(notice);
 };
 function cancelSpeech(){
   speechFollow=null;
