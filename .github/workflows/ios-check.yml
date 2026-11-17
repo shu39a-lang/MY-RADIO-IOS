@@ -21,6 +21,10 @@ jobs:
       - name: Build iPhone app
         run: |
           xcodebuild -project MyRadio.xcodeproj -scheme MyRadio -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+      - name: Test playback in iOS WebKit
+        run: |
+          DEVICE_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for devices in d["devices"].values() for x in devices if x["name"].startswith("iPhone")))')
+          xcodebuild -project MyRadio.xcodeproj -scheme MyRadio -configuration Debug -destination "platform=iOS Simulator,id=$DEVICE_ID" CODE_SIGNING_ALLOWED=NO -parallel-testing-enabled NO test
   api:
     runs-on: ubuntu-latest
     steps:
@@ -29,5 +33,5 @@ jobs:
         with:
           node-version: '22'
       - name: Verify news deduplication and embedded JavaScript
-        run: node --test tests/news-dedup.test.cjs
+        run: node --test tests/*.test.cjs
       - run: cd backend && npm test

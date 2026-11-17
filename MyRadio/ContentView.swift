@@ -187,6 +187,15 @@ private struct MyRadioHTMLView: UIViewRepresentable {
                       ["myradio", "myradio_played", "myradio_req", "myradio_dv", "myradio_hist", "myradio_unique_v1"].contains(key),
                       let value = payload["value"] as? String, value.count < 10000000 else { return }
                 UserDefaults.standard.set(value, forKey: "radio.saved." + key)
+            case "persistHistory":
+                guard let id = payload["id"] as? Int else { return }
+                guard let value = payload["value"] as? String, value.utf8.count < 10_000_000 else {
+                    sendAIJavaScript("radioHistorySaved", data: ["id": id, "ok": false])
+                    return
+                }
+                let key = "radio.saved.myradio_unique_v1"
+                UserDefaults.standard.set(value, forKey: key)
+                sendAIJavaScript("radioHistorySaved", data: ["id": id, "ok": UserDefaults.standard.string(forKey: key) == value])
             case "lookup": lookupEncyclopedia(payload)
             case "dailyLookup": lookupDaily(payload)
             case "newsLookup": lookupNews(payload)
@@ -655,7 +664,7 @@ private struct MyRadioHTMLView: UIViewRepresentable {
     }
 }
 
-private enum EmbeddedRadioPage {
+enum EmbeddedRadioPage {
     static let html = ##"""
 <!doctype html>
 <html lang="ja" data-theme="dark">
@@ -831,7 +840,7 @@ const STYLES=[
 const FEM=/kyoko|haruka|ayumi|sayaka|nanami|mizuki|female|o-ren|google 日本語/i;
 const MAL=/otoya|ichiro|keita|hattori|takumi|male/i;
 let sel=new Set(["tech","game","travel"]),styleId="f1",playing=false,alarmAt=null,alarmDaily=false,ctx=null,wake=null;
-try{const s=JSON.parse((window.__myradioSaved?.myradio ?? localStorage.getItem("myradio"))||"{}");if(s.sel)sel=new Set(s.sel);if(s.styleId)styleId=s.styleId;if(s.time)document.getElementById("time").value=s.time}catch(e){}
+try{const s=JSON.parse((window.__myradioSaved?.myradio ?? localStorage.getItem("myradio"))||"{}");if(Array.isArray(s?.sel))sel=new Set(s.sel.filter(k=>Object.hasOwn(TOPICS,k)));if(STYLES.some(v=>v.id===s?.styleId))styleId=s.styleId;if(s.time)document.getElementById("time").value=s.time}catch(e){}
 function save(){const v=JSON.stringify({sel:[...sel],styleId,time:document.getElementById("time").value});try{localStorage.setItem("myradio",v)}catch(e){}persistNative("myradio",v)}
 const $=id=>document.getElementById(id);
 const hasNative=()=>!!window.webkit?.messageHandlers?.radio;
@@ -850,7 +859,7 @@ function cancelSpeech(){
 window.radioNativeVoices=function(list){window.nativeRadioVoiceList=list; if(typeof fillDev==="function")fillDev()};
 function renderTopics(){$("topics").innerHTML="";for(const k in TOPICS){const b=document.createElement("button");b.className="chip"+(sel.has(k)?" on":"");b.textContent=TOPICS[k].e+" "+TOPICS[k].n;b.onclick=()=>{sel.has(k)?sel.delete(k):sel.add(k);save();renderTopics()};$("topics").appendChild(b)}}
 function renderVoices(){$("voices").innerHTML="";STYLES.forEach(s=>{const b=document.createElement("button");b.className="chip"+(s.id===styleId?" on":"");b.textContent=s.n;b.onclick=()=>{styleId=s.id;save();renderVoices();speakOne("こんにちは。この声でお届けします。")};$("voices").appendChild(b)})}
-function style(){return STYLES.find(s=>s.id===styleId)}
+function style(){return STYLES.find(s=>s.id===styleId)||STYLES[0]}
 function pickVoice(){const vs=(speechSynthesis.getVoices()||[]).filter(v=>/^ja/i.test(v.lang));const g=style().g;return vs.find(v=>(g==="f"?FEM:MAL).test(v.name))||vs.find(v=>!(g==="f"?MAL:FEM).test(v.name))||vs[0]||null}
 // Native and browser ranges use UTF-16 offsets in the exact spoken text.
 let speechFollow=null;
@@ -1176,25 +1185,52 @@ $("req").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();o
 const UNIQUE_KEY="myradio_unique_v1";
 let uniqueState;
 function restoreUnique(nativeValue,localValue){
- const read=value=>{try{const v=JSON.parse(value||'{}');return v&&typeof v==='object'&&!Array.isArray(v)?v:{}}catch(e){return {}}};
- const native=read(nativeValue),local=read(localValue);
- // Neither store may erase already heard items from the other store.
- return {...local,...native,seen:{...local.seen,...native.seen},
-  newsTitles:[...new Set([...(local.newsTitles||[]),...(native.newsTitles||[])])]};
+ const object=v=>v&&typeof v==='object'&&!Array.isArray(v)?v:{};
+ const read=value=>{try{return object(JSON.parse(value||'{}'))}catch(e){return {}}};
+ const strings=v=>Array.isArray(v)?v.filter(x=>typeof x==='string'):[];
+ const native=read(nativeValue),local=read(localValue),state={...local,...native};
+ // Keep heard-item history from both stores; discard only invalid cache entries.
+ for(const key of ['seen','queues','cursors','recordedV2','localCounters','editorialTurns']){
+  state[key]={...object(local[key]),...object(native[key])};
+ }
+ state.newsTitles=[...new Set([...strings(local.newsTitles),...strings(native.newsTitles)])];
+ state.editorialHistory=(Array.isArray(state.editorialHistory)?state.editorialHistory:[])
+  .filter(e=>e&&typeof e.topic==='string'&&typeof e.text==='string');
+ for(const key of Object.keys(state.queues)){
+  state.queues[key]=(Array.isArray(state.queues[key])?state.queues[key]:[])
+   .filter(a=>a&&typeof a.title==='string'&&typeof a.text==='string'&&Number.isInteger(a.pageid));
+ }
+ return state;
 }
 let localUnique;try{localUnique=localStorage.getItem(UNIQUE_KEY)}catch(e){}
 uniqueState=restoreUnique(window.__myradioSaved?.[UNIQUE_KEY],localUnique);
-uniqueState.seen=uniqueState.seen||{};
-uniqueState.queues=uniqueState.queues||{};
-uniqueState.cursors=uniqueState.cursors||{};
 let dailySerial=0,dailyRun=0;
 const dailyPending=new Map();
-function saveUnique(){
+let historySerial=0;
+const historyPending=new Map();
+window.radioHistorySaved=function(result){
+ const pending=historyPending.get(result?.id);if(!pending)return;
+ historyPending.delete(result.id);clearTimeout(pending.timer);pending.resolve(result.ok===true);
+};
+function saveNativeHistory(value){
+ if(!hasNative())return Promise.resolve(false);
+ return new Promise(resolve=>{
+  const id=++historySerial;
+  const timer=setTimeout(()=>{historyPending.delete(id);resolve(false)},3000);
+  historyPending.set(id,{resolve,timer});
+  try{sendNative({type:'persistHistory',id,value})}
+  catch(e){clearTimeout(timer);historyPending.delete(id);resolve(false)}
+ });
+}
+async function saveUnique(){
  const value=JSON.stringify(uniqueState);
- // Do not continue broadcasting if durable history cannot be recorded.
- localStorage.setItem(UNIQUE_KEY,value);
- if(window.__myradioSaved)window.__myradioSaved[UNIQUE_KEY]=value;
- persistNative(UNIQUE_KEY,value);
+ let localSaved=false;
+ try{localStorage.setItem(UNIQUE_KEY,value);localSaved=true}catch(e){}
+ // A WebKit storage error must not block playback if native storage succeeds.
+ const nativeSaved=await saveNativeHistory(value);
+ if(!localSaved&&!nativeSaved)throw Error('放送履歴を保存できませんでした。');
+ window.__myradioSaved=window.__myradioSaved||{};
+ window.__myradioSaved[UNIQUE_KEY]=value;
 }
 function localDay(){const d=new Date();return [d.getFullYear(),d.getMonth()+1,d.getDate()].join('-')}
 function dateIndex(){const d=new Date();return Math.floor(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())/86400000)}
@@ -1284,9 +1320,9 @@ async function obtainArticles(key,query,count,token){
    if(unseen(a)&&!queue.some(b=>b.pageid===a.pageid||contentKey(b.text)===contentKey(a.text)))queue.push(a);
   }
   uniqueState.cursors[key]=Number.isInteger(result.next)?result.next:-1;
-  uniqueState.queues[key]=queue;saveUnique();
+  uniqueState.queues[key]=queue;await saveUnique();
  }
- uniqueState.queues[key]=queue;saveUnique();
+ uniqueState.queues[key]=queue;await saveUnique();
  // Return any available unused articles. Missing items are filled by the built-in radio library.
  return queue.slice(0,count);
 }
@@ -1414,7 +1450,7 @@ window.radioAICompleted = function(result) {
  if (result.ok && typeof result.text === 'string' && result.text.trim()) pending.resolve(result.text.trim());
  else pending.reject(Error(result.message || '端末内AIを利用できませんでした。'));
 };
-function createEditorial(item) {
+async function createEditorial(item) {
  if (!radioAIAvaillable || !hasNative()) return Promise.resolve(null);
  const id = ++radioAISequence;
  const isNews = item.kind === 'news';
@@ -1423,7 +1459,7 @@ function createEditorial(item) {
  uniqueState.editorialTurns=uniqueState.editorialTurns||{};
  const topic=item.topicKey||title;
  const turn=uniqueState.editorialTurns[topic]||0;
- uniqueState.editorialTurns[topic]=turn+1;saveUnique();
+ uniqueState.editorialTurns[topic]=turn+1;await saveUnique();
  const angle=item.kind==='curated'?title:angles[turn%angles.length];
  const previous=(uniqueState.editorialHistory||[]).filter(e=>e.topic===topic).slice(-3).map(e=>e.text).join(' / ').slice(-1200);
  const related = isNews ? preparedSegments.slice(Math.max(0,activeSegment)+1).find(s=>s.kind==='background') : null;
@@ -1655,7 +1691,8 @@ function playPrepared(){
     const a=item.article;for(const k of articleKeys(a))uniqueState.seen[k]=localDay();
     lines=['もう少し、この話題の背景も見てみませんか。ここからはニュースとは別に、'+a.title+'について、背景資料をご紹介します。',...splitForSpeech(spokenText(a.text))];
    }
-  try{saveUnique()}catch(e){nextPrepared=null;stopRadio();$('log').textContent='放送履歴を保存できないため再生を停止しました。';return;}
+  try{await saveUnique()}catch(e){if(token!==dailyRun||generation!==utteranceGeneration)return;nextPrepared=null;stopRadio();$('log').textContent='放送履歴を保存できないため再生を停止しました。';return;}
+  if(token!==dailyRun||!playing||generation!==utteranceGeneration)return;
    if(item.kind==='news')showNewsSource(item.news);else if(item.kind==='background')reqSource(item.article.title,item.article.url);else reqSource('','');
   renderLineup();
   // The first word must not wait for an on-device AI model (up to 60 seconds).
@@ -1677,7 +1714,7 @@ function playPrepared(){
    // with the very first audio frame can increase perceived startup latency.
    setTimeout(()=>{
     if(token!==dailyRun||!playing||generation!==utteranceGeneration)return;
-    createEditorial(item).then(editorial=>{
+    createEditorial(item).then(async editorial=>{
     if(token!==dailyRun||!playing||generation!==utteranceGeneration||!editorial)return;
     editorial=distinctEditorial(removeMidProgramGoodbye(editorial),[...heardSentences,...(lines.join('。').match(/[^。！？!?]+[。！？!?]*/g)||[])]);
     if(!editorial)return;
@@ -1686,7 +1723,8 @@ function playPrepared(){
     uniqueState.seen[contentKey(editorial)]=localDay();
     uniqueState.editorialHistory.push({topic:item.topicKey||item.title,text:editorial});
     uniqueState.editorialHistory=uniqueState.editorialHistory.slice(-100);
-    saveUnique();
+    await saveUnique();
+    if(token!==dailyRun||!playing||generation!==utteranceGeneration)return;
     const aiLead = item.kind==='news'
       ? 'この話題、どう受け止めたらよいでしょうか。ここからは見出しと背景資料をもとに、端末内AIが考えたお話です。記事本文を確認したものではありません。'
       : item.kind==='curated'
@@ -1712,6 +1750,7 @@ $('preview').onclick=()=>{if(!sel.size){reqStatus('話題を1つ以上選んで�
 // Preview mode still waits and builds a complete, editable lineup before playback.
 async function playFresh(specs,feature=false,preview=false){
  stopRadio();preparedSegments=[];
+ const startingToken=dailyRun;
  if(!specs.length)return;
   // Online data is allowed to arrive after the first spoken sentence, but the
   // final goodbye must wait for this lookup to finish.
@@ -1726,7 +1765,8 @@ async function playFresh(specs,feature=false,preview=false){
    const item=localRadioFeature(spec.key,i,spec.query);
    if(item)preparedSegments.push(item);
   }
-  try{saveUnique()}catch(e){$('log').textContent='放送履歴を保存できませんでした。';return;}
+  try{await saveUnique()}catch(e){if(startingToken!==dailyRun)return;onlineLookupPending=false;$('log').textContent='放送履歴を保存できませんでした。';return;}
+  if(startingToken!==dailyRun)return;
   playPrepared(); // Calls utter() synchronously; does not wait for a network request.
   if(!playing)return;
   const progress=document.createElement('p');progress.className='note';
@@ -1782,7 +1822,7 @@ async function playFresh(specs,feature=false,preview=false){
   if(preview){
    preparedSegments=resultSegments;
    if(!preparedSegments.length)throw Error('この話題の番組を準備できませんでした。');
-   saveUnique();renderLineup();
+   await saveUnique();if(token!==dailyRun)return;renderLineup();
    $('log').textContent=(fallbacks.length?'ニュースがない分野：'+fallbacks.join('、')+'。背景解説・収録特集をご利用ください。\n':'')+
      '番組表を用意しました。「この順番で放送開始」を押してください。';
    $('lineupcard').scrollIntoView({block:'nearest'});

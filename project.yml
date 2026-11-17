@@ -52,3 +52,11 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: jp.myradio.personal.tests
 
+schemes:
+  MyRadio:
+    build:
+      targets:
+        MyRadio: all
+        MyRadioTests: [test]
+    test:
+      targets: [MyRadioTests]
